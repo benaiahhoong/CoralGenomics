@@ -1,0 +1,17 @@
+﻿sample_id,dominant_symbiont,bleaching_status
+ARM01-1,C15-C15rz-C15sa-C15m,bleached
+ARM01-2,C15-C15gs-C15ai,unbleached
+ARM01-3,C15-C15gs-C15ai,unbleached
+ARM01-4,C15/C93a,bleached
+ARM01-5,C15-C15gs-C15ai,bleached
+ARM01-6,C15-C15gs,bleached
+ARM01-7,C15-C15gs-C15ai,unbleached
+ARM01-8,C15-C15gs-C15ai,unbleached
+ARM09-1,C15-C15by-C15ev-C15kl,unbleached
+ARM09-2,C15-C15by-C15ev-C15kl,unbleached
+ARM09-3,C15-C15by-C15ev-C15kl,unbleached
+ARM09-4,C15-C15ev-C15dt-C15pm,unbleached
+ARM09-5,C15-C15ev-C15dt,unbleached
+ARM09-6,C15-C15ev-C15dt,unbleached
+ARM09-7,C15-C15ev-C15dt-C15pm,unbleached
+ARM09-8,C15-C15gs-C15ai,unbleached

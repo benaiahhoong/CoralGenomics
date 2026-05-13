@@ -1,0 +1,687 @@
+---
+title: "symportal_output"
+format: html
+---
+
+# SymPortal Output
+
+This document will be used for the analysis of SymPortal output for the 16 samples of Porites lutea collected from Aldabra.
+
+## Load Libraries
+
+```{r}
+library(here)
+library(ggplot2)
+library(tidyr)
+library(ggpubr)
+library(jsonlite)
+library(cowplot)
+library(dplyr)
+```
+
+## ITS2 Sequence Absolute Abundance by Sample
+
+```{r}
+#| fig-width: 10
+#| fig-height: 10
+#| dpi: 300
+
+# Load ITS2 sequence absolute abundance data
+seq_absolute_abundance <- read.csv(
+  here("symportal_data/20260116T164045_hoongbe1/post_med_seqs/seq_absolute_abundance.csv"),
+  check.names = FALSE
+)
+
+# Load SymPortal sequence colour dictionary
+color_dict <- jsonlite::fromJSON(
+  here("symportal_data/20260116T164045_hoongbe1/html/color_dict_post_med.json")
+)
+
+# Ensure every sequence in the data has a colour; fall back to grey if missing
+sequence_names <- setdiff(names(seq_absolute_abundance), "sample_name")
+missing_sequences <- setdiff(sequence_names, names(color_dict))
+if (length(missing_sequences) > 0) {
+  color_dict <- c(color_dict, setNames(rep("#808080", length(missing_sequences)), missing_sequences))
+}
+
+# Order sequences by total abundance; reverse to place least abundant at the bottom
+seq_totals_abs <- colSums(seq_absolute_abundance[sequence_names], na.rm = TRUE)
+seq_order <- rev(names(sort(seq_totals_abs, decreasing = TRUE)))
+color_palette <- color_dict[seq_order]
+
+# Build sample order alphabetically
+sample_levels <- sort(unique(seq_absolute_abundance$sample_name))
+
+# Create mapping from sample IDs to numeric colony labels for x-axis display
+colony_name_map <- setNames(as.character(seq_along(sample_levels)), sample_levels)
+
+# Convert to long format for ggplot2
+seq_long <- seq_absolute_abundance %>%
+  pivot_longer(cols = -sample_name, 
+               names_to = "sequence", 
+               values_to = "abundance")
+seq_long$sequence <- factor(seq_long$sequence, levels = seq_order)
+seq_long$sample_name <- as.character(seq_long$sample_name)
+seq_long$sample_name <- factor(seq_long$sample_name, levels = sample_levels)
+
+# Add site grouping for faceting
+seq_long <- seq_long %>%
+  mutate(site = ifelse(grepl("^ARM01", sample_name), "Seaward Reef Colonies", "Lagoon Colonies"),
+         site = factor(site, levels = c("Seaward Reef Colonies", "Lagoon Colonies")))
+
+# Create stacked bar chart
+p1 <- ggplot(seq_long, aes(x = sample_name, y = abundance, fill = sequence)) +
+  geom_bar(stat = "identity") +
+  facet_grid(~site, scales = "free_x", space = "free_x", switch = "x") +
+  scale_x_discrete(labels = colony_name_map) +
+  scale_fill_manual(values = color_palette, na.translate = FALSE) +
+  scale_y_continuous(expand = c(0, 0), labels = scales::label_number(suffix = "k", scale = 1/1000)) +
+  theme_pubr(base_size = 14) +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10),
+        legend.title = element_text(face = "bold"),
+        legend.key.size = unit(0.4, "cm"),
+        legend.box.just = "center",
+        legend.margin = margin(0, 0, 0, 0),
+        legend.spacing.y = unit(2, "pt"),
+        plot.margin = margin(10, 10, 10, 10),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 16, face = "bold"),
+        strip.placement = "outside",
+        panel.spacing.x = unit(8, "mm")) +
+  guides(fill = guide_legend(ncol = 8, reverse = TRUE, title.position = "top")) +
+  labs(x = "", y = "Absolute Abundance", fill = "ITS2 Sequence")
+
+print(p1)
+
+# Save plot
+ggsave(here("figures/seq_absolute_abundance.png"), p1, width = 10, height = 10, dpi = 300)
+ggsave(here("figures/seq_absolute_abundance.svg"), p1, width = 10, height = 10)
+
+```
+
+## ITS2 Sequence Relative Abundance by Sample
+
+```{r}
+#| fig-width: 10
+#| fig-height: 10
+#| dpi: 300
+
+# Load ITS2 sequence relative abundance data
+seq_relative_abundance <- read.csv(
+  here("symportal_data/20260116T164045_hoongbe1/post_med_seqs/seq_relative_abundance.csv"),
+  check.names = FALSE
+)
+
+# Use the same sequence order and colours for consistency
+rel_sequence_names <- setdiff(names(seq_relative_abundance), "sample_name")
+# Align palette to relative data columns (fall back to grey for any unseen sequences)
+rel_missing_sequences <- setdiff(rel_sequence_names, names(color_dict))
+if (length(rel_missing_sequences) > 0) {
+  color_dict <- c(color_dict, setNames(rep("#808080", length(rel_missing_sequences)), rel_missing_sequences))
+}
+rel_color_palette <- color_dict[rel_sequence_names]
+
+seq_rel_long <- seq_relative_abundance %>%
+  pivot_longer(cols = -sample_name,
+               names_to = "sequence",
+               values_to = "abundance")
+seq_rel_long$sequence <- factor(seq_rel_long$sequence, levels = seq_order)
+seq_rel_long$sample_name <- as.character(seq_rel_long$sample_name)
+seq_rel_long$sample_name <- factor(seq_rel_long$sample_name, levels = sample_levels)
+
+# Add site grouping for faceting
+seq_rel_long <- seq_rel_long %>%
+  mutate(site = ifelse(grepl("^ARM01", sample_name), "Seaward Reef Colonies", "Lagoon Colonies"),
+         site = factor(site, levels = c("Seaward Reef Colonies", "Lagoon Colonies")))
+
+p2 <- ggplot(seq_rel_long, aes(x = sample_name, y = abundance, fill = sequence)) +
+  geom_bar(stat = "identity") +
+  facet_grid(~site, scales = "free_x", space = "free_x", switch = "x") +
+  scale_x_discrete(labels = colony_name_map) +
+  scale_fill_manual(values = rel_color_palette, na.translate = FALSE) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_pubr(base_size = 14) +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10),
+        legend.title = element_text(face = "bold"),
+        legend.key.size = unit(0.4, "cm"),
+        legend.box.just = "center",
+        legend.margin = margin(0, 0, 0, 0),
+        legend.spacing.y = unit(2, "pt"),
+        plot.margin = margin(10, 10, 10, 10),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 16, face = "bold"),
+        strip.placement = "outside",
+        panel.spacing.x = unit(8, "mm")) +
+  guides(fill = guide_legend(ncol = 8, reverse = TRUE, title.position = "top")) +
+  labs(x = "", y = "Relative Abundance", fill = "ITS2 Sequence")
+
+print(p2)
+
+# Save plot
+ggsave(here("figures/seq_relative_abundance.png"), p2, width = 10, height = 10, dpi = 300)
+ggsave(here("figures/seq_relative_abundance.svg"), p2, width = 10, height = 10)
+```
+
+## ITS2 Type Profile Absolute Abundance by Sample
+
+```{r}
+#| fig-width: 10
+#| fig-height: 10
+#| dpi: 300
+
+# Load ITS2 type profile absolute abundance data
+type_absolute_abundance <- read.csv(
+  here("symportal_data/20260116T164045_hoongbe1/its2_type_profiles/its2_type_profiles_absolute.csv"),
+  check.names = FALSE
+)
+
+# Load SymPortal type profile colour dictionary
+type_color_dict <- jsonlite::fromJSON(
+  here("symportal_data/20260116T164045_hoongbe1/html/prof_color_dict.json")
+)
+
+# Load metadata to map type profile names to UIDs
+type_meta <- read.delim(
+  here("symportal_data/20260116T164045_hoongbe1/its2_type_profiles/665_20260116T182401_DBV_20260117T155228.profiles.meta_only.txt"),
+  check.names = FALSE
+)
+
+# Create mapping from type profile name to UID
+name_to_uid_mapping <- setNames(
+  as.character(type_meta$`ITS2 type profile UID`),
+  type_meta$`ITS2 type profile`
+)
+
+# Ensure every type profile has a colour; fall back to grey if missing
+type_names <- setdiff(names(type_absolute_abundance), "sample_name")
+# Convert JSON keys to character for matching (in case they're numeric strings)
+type_dict_keys_as_char <- as.character(names(type_color_dict))
+missing_types <- setdiff(as.character(type_names), type_dict_keys_as_char)
+if (length(missing_types) > 0) {
+  type_color_dict <- c(type_color_dict, setNames(rep("#808080", length(missing_types)), missing_types))
+}
+
+# Order type profiles by total abundance; reverse to place least abundant at the bottom
+type_totals_abs <- colSums(type_absolute_abundance[type_names], na.rm = TRUE)
+type_order <- rev(names(sort(type_totals_abs, decreasing = TRUE)))
+# Build palette using name-to-UID mapping
+type_color_palette <- sapply(type_order, function(x) {
+  uid <- name_to_uid_mapping[x]
+  if (!is.na(uid) && uid %in% names(type_color_dict)) {
+    type_color_dict[[uid]]
+  } else {
+    "#808080"  # fallback grey
+  }
+})
+
+# Convert to long format for ggplot2
+type_long <- type_absolute_abundance %>%
+  pivot_longer(cols = -sample_name, 
+               names_to = "type_profile", 
+               values_to = "abundance")
+type_long$type_profile <- factor(type_long$type_profile, levels = type_order)
+type_long$sample_name <- as.character(type_long$sample_name)
+type_long$sample_name <- factor(type_long$sample_name, levels = sample_levels)
+
+# Add site grouping for faceting
+type_long <- type_long %>%
+  mutate(site = ifelse(grepl("^ARM01", sample_name), "Seaward Reef Colonies", "Lagoon Colonies"),
+         site = factor(site, levels = c("Seaward Reef Colonies", "Lagoon Colonies")))
+
+# Legend order: first appearance from left to right across samples
+legend_order <- type_long %>%
+  filter(abundance > 0) %>%
+  arrange(sample_name) %>%
+  pull(type_profile) %>%
+  as.character() %>%
+  unique()
+if (length(legend_order) == 0) legend_order <- type_order
+
+# Create stacked bar chart
+p3 <- ggplot(type_long, aes(x = sample_name, y = abundance, fill = type_profile)) +
+  geom_bar(stat = "identity") +
+  facet_grid(~site, scales = "free_x", space = "free_x", switch = "x") +
+  scale_x_discrete(labels = colony_name_map) +
+  scale_fill_manual(values = type_color_palette[legend_order], breaks = legend_order, na.translate = FALSE) +
+  scale_y_continuous(expand = c(0, 0), labels = scales::label_number(suffix = "k", scale = 1/1000)) +
+  theme_pubr(base_size = 14) +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10),        legend.title = element_text(face = "bold"),        legend.key.size = unit(0.4, "cm"),
+        legend.box.just = "center",
+        legend.margin = margin(0, 0, 0, 0),
+        legend.spacing.y = unit(2, "pt"),
+        plot.margin = margin(10, 10, 10, 10),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 16, face = "bold"),
+        strip.placement = "outside",
+        panel.spacing.x = unit(8, "mm")) +
+  guides(fill = guide_legend(ncol = 8, reverse = FALSE, title.position = "top")) +
+  labs(x = "", y = "Absolute Abundance", fill = "ITS2 Type Profile")
+
+print(p3)
+
+# Save plot
+ggsave(here("figures/type_profile_absolute_abundance.png"), p3, width = 10, height = 10, dpi = 300)
+ggsave(here("figures/type_profile_absolute_abundance.svg"), p3, width = 10, height = 10)
+```
+
+## ITS2 Type Profile Relative Abundance by Sample
+
+```{r}
+#| fig-width: 10
+#| fig-height: 10
+#| dpi: 300
+
+# Load ITS2 type profile relative abundance data
+type_relative_abundance <- read.csv(
+  here("symportal_data/20260116T164045_hoongbe1/its2_type_profiles/its2_type_profiles_relative.csv"),
+  check.names = FALSE
+)
+
+# Use the same type profile order and colours for consistency
+rel_type_names <- setdiff(names(type_relative_abundance), "sample_name")
+# Build palette using name-to-UID mapping
+rel_type_color_palette <- sapply(type_order, function(x) {
+  uid <- name_to_uid_mapping[x]
+  if (!is.na(uid) && uid %in% names(type_color_dict)) {
+    type_color_dict[[uid]]
+  } else {
+    "#808080"  # fallback grey
+  }
+})
+
+type_rel_long <- type_relative_abundance %>%
+  pivot_longer(cols = -sample_name,
+               names_to = "type_profile",
+               values_to = "abundance")
+type_rel_long$type_profile <- factor(type_rel_long$type_profile, levels = type_order)
+type_rel_long$sample_name <- as.character(type_rel_long$sample_name)
+type_rel_long$sample_name <- factor(type_rel_long$sample_name, levels = sample_levels)
+
+# Add site grouping for faceting
+type_rel_long <- type_rel_long %>%
+  mutate(site = ifelse(grepl("^ARM01", sample_name), "Seaward Reef Colonies", "Lagoon Colonies"),
+         site = factor(site, levels = c("Seaward Reef Colonies", "Lagoon Colonies")))
+
+# Add asterisks to mark bleached colonies
+bleached_colonies <- c("ARM01-1", "ARM01-4", "ARM01-5", "ARM01-6")
+colony_name_map[bleached_colonies] <- paste0(colony_name_map[bleached_colonies], "*")
+
+p4 <- ggplot(type_rel_long, aes(x = sample_name, y = abundance, fill = type_profile)) +
+  geom_bar(stat = "identity") +
+  facet_grid(~site, scales = "free_x", space = "free_x", switch = "x") +
+  scale_x_discrete(labels = colony_name_map) +
+  scale_fill_manual(values = rel_type_color_palette[legend_order], breaks = legend_order, na.translate = FALSE) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.0)) +
+  theme_pubr(base_size = 14) +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10),        legend.title = element_text(face = "bold"),        legend.key.size = unit(0.4, "cm"),
+        legend.box.just = "center",
+        legend.margin = margin(0, 0, 0, 0),
+        legend.spacing.y = unit(2, "pt"),
+        plot.margin = margin(10, 10, 10, 10),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 16, face = "bold"),
+        strip.placement = "outside",
+        panel.spacing.x = unit(8, "mm")) +
+  guides(fill = guide_legend(ncol = 8, reverse = FALSE, title.position = "top")) +
+  labs(x = "", y = "Relative Abundance", fill = "ITS2 Type Profile")
+
+print(p4)
+
+# Save plot
+ggsave(here("figures/type_profile_relative_abundance.png"), p4, width = 10, height = 10, dpi = 300)
+ggsave(here("figures/type_profile_relative_abundance.svg"), p4, width = 10, height = 10)
+```
+
+## Combined Figure: Sequence and Type Profile Absolute Abundance
+
+```{r}
+#| fig-width: 10
+#| fig-height: 16
+#| dpi: 300
+
+# Combine p1 (sequence absolute abundance) and p3 (type profile absolute abundance)
+spacer_abs <- cowplot::ggdraw()  # blank spacer between panels
+
+combined_abs_figure <- cowplot::plot_grid(p1, spacer_abs, p3,
+                                          nrow = 3, ncol = 1,
+                                          rel_heights = c(1, 0.075, 0.8),
+                                          labels = c("A", "", "B"),
+                                          label_size = 16,
+                                          align = "v")
+
+print(combined_abs_figure)
+
+# Save combined figure
+ggsave(here("figures/combined_absolute_abundance.png"), combined_abs_figure, width = 10, height = 16, dpi = 300)
+ggsave(here("figures/combined_absolute_abundance.svg"), combined_abs_figure, width = 10, height = 16)
+```
+
+## Combined Figure: Sequence and Type Profile Relative Abundance
+
+```{r}
+#| fig-width: 10
+#| fig-height: 16
+#| dpi: 300
+
+# Combine p2 (sequence relative abundance) and p4 (type profile relative abundance)
+# Create a spacer for more space between panels
+spacer <- plot.new()
+
+combined_figure <- cowplot::plot_grid(p2, spacer, p4, 
+                                       nrow = 3, ncol = 1,
+                                       rel_heights = c(1, 0.075, 0.8),
+                                       labels = c("A", "", "B"),
+                                       label_size = 16,
+                                       align = "v")
+
+print(combined_figure)
+
+# Save combined figure
+ggsave(here("figures/combined_relative_abundance.png"), combined_figure, width = 10, height = 16, dpi = 300)
+ggsave(here("figures/combined_relative_abundance.svg"), combined_figure, width = 10, height = 16)
+```
+
+## Filter ITS2 Sequences
+
+```{r}
+# Read sequences to keep from DIV list
+div_sequences <- readLines(here("data_analysis/DIV_list.txt"), warn = FALSE)
+div_sequences <- gsub("^\\ufeff", "", div_sequences)
+div_sequences <- unique(trimws(div_sequences))
+div_sequences <- div_sequences[div_sequences != ""]
+
+if (length(div_sequences) == 0) {
+  stop("DIV_list.txt is empty. Add sequence names to keep before running this chunk.")
+}
+
+available_sequences <- setdiff(names(seq_relative_abundance), "sample_name")
+matched_div_sequences <- intersect(div_sequences, available_sequences)
+
+if (length(matched_div_sequences) == 0) {
+  stop("No DIV list sequences matched columns in seq_relative_abundance. Check spelling/format in DIV_list.txt.")
+}
+
+# Create new dataframe where non-DIV sequences are grouped as "minor"
+seq_relative_abundance_filtered <- seq_relative_abundance %>%
+  pivot_longer(
+    cols = -sample_name,
+    names_to = "sequence",
+    values_to = "abundance"
+  ) %>%
+  mutate(sequence = if_else(sequence %in% matched_div_sequences, sequence, "minor")) %>%
+  group_by(sample_name, sequence) %>%
+  summarise(abundance = sum(abundance, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = sequence, values_from = abundance, values_fill = 0)
+```
+
+## Filtered ITS2 Sequence Relative Abundance by Sample
+
+```{r}
+#| fig-width: 10
+#| fig-height: 10
+#| dpi: 300
+
+filtered_sequence_names <- setdiff(names(seq_relative_abundance_filtered), "sample_name")
+
+# Build color palette for filtered sequences and add grey for minor group
+filtered_missing_sequences <- setdiff(filtered_sequence_names, names(color_dict))
+filtered_missing_sequences <- setdiff(filtered_missing_sequences, "minor")
+if (length(filtered_missing_sequences) > 0) {
+  color_dict <- c(color_dict, setNames(rep("#808080", length(filtered_missing_sequences)), filtered_missing_sequences))
+}
+filtered_color_palette <- color_dict[setdiff(filtered_sequence_names, "minor")]
+filtered_color_palette <- c(filtered_color_palette, minor = "#808080")
+
+filtered_seq_long <- seq_relative_abundance_filtered %>%
+  pivot_longer(cols = -sample_name,
+               names_to = "sequence",
+               values_to = "abundance") %>%
+  mutate(sequence = if_else(sequence == "minor", "Filtered sequences", sequence),
+         sample_name = as.character(sample_name),
+         sample_name = factor(sample_name, levels = sample_levels),
+         site = ifelse(grepl("^ARM01", sample_name), "Seaward Reef Colonies", "Lagoon Colonies"),
+         site = factor(site, levels = c("Seaward Reef Colonies", "Lagoon Colonies")))
+
+filtered_sequence_order <- filtered_seq_long %>%
+  group_by(sequence) %>%
+  summarise(total = sum(abundance, na.rm = TRUE), .groups = "drop") %>%
+  arrange(total) %>%
+  pull(sequence) %>%
+  as.character()
+
+# Reorder so minor is at bottom (first in factor levels for stacking)
+if ("Filtered sequences" %in% filtered_sequence_order) {
+  filtered_sequence_order <- c(
+    "Filtered sequences",
+    setdiff(filtered_sequence_order, "Filtered sequences")
+  )
+}
+
+filtered_seq_long$sequence <- factor(filtered_seq_long$sequence, levels = filtered_sequence_order)
+
+filtered_fill_values <- setNames(
+  unname(filtered_color_palette[ifelse(filtered_sequence_order == "Filtered sequences", "minor", filtered_sequence_order)]),
+  filtered_sequence_order
+)
+
+filtered_legend_order <- filtered_seq_long %>%
+  filter(abundance > 0) %>%
+  arrange(sample_name) %>%
+  pull(sequence) %>%
+  as.character() %>%
+  unique()
+if (length(filtered_legend_order) == 0) filtered_legend_order <- filtered_sequence_order
+if ("Filtered sequences" %in% filtered_legend_order) {
+  filtered_legend_order <- c(
+    setdiff(filtered_legend_order, "Filtered sequences"),
+    "Filtered sequences"
+  )
+}
+
+p5 <- ggplot(filtered_seq_long, aes(x = sample_name, y = abundance, fill = sequence)) +
+  geom_bar(stat = "identity") +
+  facet_grid(~site, scales = "free_x", space = "free_x", switch = "x") +
+  scale_x_discrete(labels = colony_name_map) +
+  scale_fill_manual(values = filtered_fill_values[filtered_legend_order], breaks = filtered_legend_order, na.translate = FALSE) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(ylim = c(0, 1.0)) +
+  theme_pubr(base_size = 14) +
+  theme(axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        legend.position = "bottom",
+        legend.text = element_text(size = 10),
+        legend.title = element_text(face = "bold"),
+        legend.key.size = unit(0.4, "cm"),
+        legend.box.just = "center",
+        legend.margin = margin(0, 0, 0, 0),
+        legend.spacing.y = unit(2, "pt"),
+        plot.margin = margin(10, 10, 10, 10),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 16, face = "bold"),
+        strip.placement = "outside",
+        panel.spacing.x = unit(8, "mm")) +
+  guides(fill = guide_legend(ncol = 12, reverse = FALSE, title.position = "top")) +
+  labs(x = "", y = "Relative Abundance", fill = "ITS2 Sequence")
+
+print(p5)
+
+# Save plot
+ggsave(here("figures/seq_relative_abundance_filtered.png"), p5, width = 10, height = 10, dpi = 300)
+ggsave(here("figures/seq_relative_abundance_filtered.svg"), p5, width = 10, height = 10)
+```
+
+## Combined Figure: Filtered Sequences and Type Profile Relative Abundance
+
+```{r}
+#| fig-width: 10
+#| fig-height: 16
+#| dpi: 300
+
+# Combine p5 (filtered sequence relative abundance) and p4 (type profile relative abundance)
+# Create a spacer for more space between panels
+spacer <- plot.new()
+
+combined_filtered_figure <- cowplot::plot_grid(p5, spacer, p4, 
+                                               nrow = 3, ncol = 1,
+                                               rel_heights = c(1, 0.075, 1),
+                                               labels = c("A", "", "B"),
+                                               label_size = 16,
+                                               align = "v")
+
+print(combined_filtered_figure)
+
+# Save combined figure
+ggsave(here("figures/combined_filtered_and_type_relative_abundance.png"), combined_filtered_figure, width = 10, height = 16, dpi = 300)
+ggsave(here("figures/combined_filtered_and_type_relative_abundance.svg"), combined_filtered_figure, width = 10, height = 16)
+```
+
+## Combined Figure: Filtered Sequences and Type Profile Relative Abundance (Side-by-side)
+
+```{r}
+#| fig-width: 16
+#| fig-height: 7
+#| dpi: 300
+
+# Combine p5 and p4 side-by-side
+combined_filtered_figure_sidebyside <- cowplot::plot_grid(p5, spacer, p4,
+                                                           nrow = 1, ncol = 3,
+                                                           rel_widths = c(1, 0.05, 1),
+                                                           labels = c("A", "", "B"),
+                                                           label_size = 16,
+                                                           align = "v")
+
+print(combined_filtered_figure_sidebyside)
+
+# Save combined figure
+ggsave(here("figures/combined_filtered_and_type_relative_abundance_sidebyside.png"), combined_filtered_figure_sidebyside, width = 16, height = 7, dpi = 300)
+ggsave(here("figures/combined_filtered_and_type_relative_abundance_sidebyside.svg"), combined_filtered_figure_sidebyside, width = 16, height = 7)
+```
+
+# DIV Data Summary
+
+```{r}
+# Count all detected DIVs in each sample from seq_absolute_abundance
+all_div_columns <- setdiff(names(seq_absolute_abundance), "sample_name")
+
+# Optional comparison: count only DIVs listed in DIV_list.txt
+div_sequences_local <- readLines(here("data_analysis/DIV_list.txt"), warn = FALSE)
+div_sequences_local <- gsub("^\\ufeff", "", div_sequences_local)
+div_sequences_local <- unique(trimws(div_sequences_local))
+div_sequences_local <- div_sequences_local[div_sequences_local != ""]
+
+div_list_columns <- intersect(div_sequences_local, all_div_columns)
+
+div_presence_summary <- seq_absolute_abundance %>%
+  transmute(
+    sample_name,
+    n_DIVs_present_all = rowSums(across(all_of(all_div_columns), ~ .x > 0), na.rm = TRUE),
+    n_DIVs_present_from_DIV_list = if (length(div_list_columns) > 0) {
+      rowSums(across(all_of(div_list_columns), ~ .x > 0), na.rm = TRUE)
+    } else {
+      NA_integer_
+    }
+  ) %>%
+  arrange(sample_name)
+
+avg_divs_per_sample_all <- mean(div_presence_summary$n_DIVs_present_all, na.rm = TRUE)
+
+if (length(div_list_columns) > 0) {
+  avg_divs_per_sample_div_list <- mean(div_presence_summary$n_DIVs_present_from_DIV_list, na.rm = TRUE)
+}
+
+print(div_presence_summary)
+cat(sprintf("Average number of DIVs per sample (all detected): %.2f\n", avg_divs_per_sample_all))
+
+if (length(div_list_columns) > 0) {
+  cat(sprintf("Average number of DIVs per sample (DIV_list only): %.2f\n", avg_divs_per_sample_div_list))
+} else {
+  cat("No DIV_list.txt entries matched seq_absolute_abundance columns. DIV_list-only summary skipped.\n")
+}
+```
+
+# Bleaching Status Venn Diagram
+```{r}
+bleaching_data <- read.csv(here("symportal_data/bleaching_data.csv"))
+
+bleaching_sets <- bleaching_data %>%
+  filter(!is.na(bleaching_status), !is.na(dominant_symbiont)) %>%
+  mutate(
+    bleaching_status = trimws(as.character(bleaching_status)),
+    dominant_symbiont = trimws(as.character(dominant_symbiont))
+  ) %>%
+  distinct(bleaching_status, dominant_symbiont) %>%
+  group_by(bleaching_status) %>%
+  summarise(dominant_symbiont = list(sort(unique(dominant_symbiont))), .groups = "drop") %>%
+  tibble::deframe()
+
+if (!all(c("bleached", "unbleached") %in% names(bleaching_sets))) {
+  stop("Expected both 'bleached' and 'unbleached' bleaching_status values in bleaching_data.csv.")
+}
+
+bleached_symbionts <- bleaching_sets[["bleached"]]
+unbleached_symbionts <- bleaching_sets[["unbleached"]]
+
+bleached_only <- setdiff(bleached_symbionts, unbleached_symbionts)
+unbleached_only <- setdiff(unbleached_symbionts, bleached_symbionts)
+shared_symbionts <- intersect(bleached_symbionts, unbleached_symbionts)
+
+circle_points <- function(center_x, center_y, radius, n = 200) {
+  angle <- seq(0, 2 * pi, length.out = n)
+  data.frame(
+    x = center_x + radius * cos(angle),
+    y = center_y + radius * sin(angle)
+  )
+}
+
+bleached_circle <- circle_points(0, 0.65, 1)
+unbleached_circle <- circle_points(0, -0.65, 1)
+
+bleaching_venn <- ggplot() +
+  geom_polygon(
+    data = bleached_circle,
+    aes(x = x, y = y),
+    fill = "#ffbf00",
+    color = "#ffbf00",
+    alpha = 0.55,
+    linewidth = 1.2
+  ) +
+  geom_polygon(
+    data = unbleached_circle,
+    aes(x = x, y = y),
+    fill = "#92d051",
+    color = "#92d051",
+    alpha = 0.55,
+    linewidth = 1.2
+  ) +
+  annotate("text", x = 0, y = 1, label = length(bleached_only), size = 6, fontface = "bold") +
+  annotate("text", x = 0, y = 0, label = length(shared_symbionts), size = 6, fontface = "bold") +
+  annotate("text", x = 0, y = -1, label = length(unbleached_only), size = 6, fontface = "bold") +
+  annotate("text", x = 0, y = 1.75, label = "Profiles in Bleached Colonies", color = "black", fontface = "bold", size = 5, vjust = 0) +
+  annotate("text", x = 0, y = -1.75, label = "Profiles in Unbleached Colonies", color = "black", fontface = "bold", size = 5, vjust = 1) +
+  coord_equal(xlim = c(-1.55, 2.2), ylim = c(-1.9, 1.9), clip = "off") +
+  theme_void(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+print(bleaching_venn)
+
+ggsave(here("figures/bleaching_status_venn_diagram.png"), bleaching_venn, width = 8, height = 6, dpi = 300)
+ggsave(here("figures/bleaching_status_venn_diagram.svg"), bleaching_venn, width = 8, height = 6)
+
+
+```

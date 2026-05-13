@@ -1,0 +1,668 @@
+---
+title: "lagoon_vs_sea"
+format: html
+---
+
+# Lagoon vs Sea
+
+This document will compare the ITS2 type profiles between Porites lutea in Aldabra lagoon and in the seaward reef:
+
+1. PCoA of Bray-Curtis distances
+2. PERMANOVA test and PERMDISP companion test
+3. PCoA of C15 profiles (dominant profiles only)
+4. Comparing ITS2 type profile distances between lagoon and sea samples
+
+## Load Libraries
+
+```{r}
+library(here)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(vegan)
+library(ggrepel)
+library(cowplot)
+```
+
+# 1. PCoA of Bray-Curtis Distances
+
+```{r}
+#| fig-width: 7
+#| fig-height: 6
+#| dpi: 300
+
+# Load PCoA coordinates (Bray-Curtis, no square root transformation)
+pcoa_coords <- read.csv(
+  here("symportal_data/20260116T164045_hoongbe1/between_sample_distances/C/20260117T155228_braycurtis_samples_PCoA_coords_C_no_sqrt.csv"),
+  row.names = 1
+)
+
+# Extract sample names and create location variable
+pcoa_coords$sample_name <- rownames(pcoa_coords)
+
+# Assign sampling site based on sample prefix
+pcoa_coords$site <- ifelse(grepl("^ARM01", pcoa_coords$sample_name), "ARM01", "ARM09")
+
+# Get proportion of variance explained for axes
+prop_var <- pcoa_coords[pcoa_coords$sample_name == "proportion_explained", c("PC1", "PC2")]
+pcoa_coords <- pcoa_coords[pcoa_coords$sample_name != "proportion_explained", ]
+
+# Convert PC columns to numeric
+pcoa_coords$PC1 <- as.numeric(pcoa_coords$PC1)
+pcoa_coords$PC2 <- as.numeric(pcoa_coords$PC2)
+
+# Add jitter to lagoon samples (ARM09) on x-axis for better visibility
+set.seed(123)  # For reproducibility
+jitter_amount <- 0.025  # Adjust this value to control jitter amount
+pcoa_coords$PC1_jittered <- pcoa_coords$PC1
+lagoon_indices <- pcoa_coords$site == "ARM09"
+pcoa_coords$PC1_jittered[lagoon_indices] <- pcoa_coords$PC1[lagoon_indices] + 
+  runif(sum(lagoon_indices), -jitter_amount, jitter_amount)
+
+# Create PCoA plot
+p_pcoa <- ggplot(pcoa_coords, aes(x = PC1_jittered, y = PC2, fill = site)) +
+  geom_point(size = 3, alpha = 0.8, shape = 21, stroke = 1, color = "black") +
+  geom_text_repel(
+    data = subset(pcoa_coords, sample_name == "ARM09-8"),
+    aes(label = "Colony 16"),
+    size = 3,
+    nudge_x = 0.05,
+    min.segment.length = 0,
+    nudge_y = 0.005,
+    box.padding = 0.6,
+    point.padding = 0.4,
+    segment.size = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(
+    values = c("ARM01" = "#3498db", "ARM09" = "#e74c3c"),
+    labels = c("ARM01" = "Seaward reef", "ARM09" = "Lagoon")
+  ) + 
+  labs(
+    x = paste0("PC1 (", round(as.numeric(prop_var$PC1) * 100, 1), "%)"),
+    y = paste0("PC2 (", round(as.numeric(prop_var$PC2) * 100, 1), "%)"),
+    fill = "Colony origin"
+  ) +
+  theme_pubr(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = c(1, 0.05),
+    legend.justification = c(1, 0),
+    legend.text = element_text(size = 12, vjust = 0.5),
+    legend.background = element_rect(color = "black", fill = "white", linewidth = 0.3),
+    legend.margin = margin(4, 6, 4, 6),
+    legend.key = element_blank(),
+    legend.title = element_text(size = 14, face = "bold")
+  )
+
+print(p_pcoa)
+
+# Save plot
+ggsave(here("figures/pcoa_braycurtis.png"), p_pcoa, width = 7, height = 6, dpi = 300)
+ggsave(here("figures/pcoa_braycurtis.svg"), p_pcoa, width = 7, height = 6)
+```
+
+# 2. PERMANOVA Test
+
+```{r}
+# Load Bray-Curtis distance matrix
+dist_matrix <- read.table(
+  here("symportal_data/20260116T164045_hoongbe1/between_sample_distances/C/20260117T155228_braycurtis_sample_distances_C_no_sqrt.dist"),
+  header = FALSE,
+  sep = "\t",
+  row.names = 1
+)
+
+# Remove the second column (UIDs) and set column names
+sample_names <- rownames(dist_matrix)
+dist_matrix <- dist_matrix[, -1]  # Remove UID column
+colnames(dist_matrix) <- sample_names
+
+# Convert to dist object
+dist <- as.dist(dist_matrix)
+
+# Create group vector
+group <- ifelse(grepl("^ARM01", sample_names), "ARM01", "ARM09")
+
+# Perform PERMANOVA (adonis2)
+permanova_result <- adonis2(dist ~ group, permutations = 999)
+
+# Print results
+print(permanova_result)
+```
+
+## PERMDISP Test
+
+Test for homogeneity of multivariate dispersions (assumption check for PERMANOVA)
+
+```{r}
+# Perform betadisper analysis (using same distance matrix and groups from above)
+bd <- betadisper(dist, group)
+
+# Visualise PERMDISP
+plot(bd)
+
+# Test for significant differences in dispersion
+permdisp_result <- permutest(bd, permutations = 999)
+
+# Print results
+print(permdisp_result)
+
+# Show mean distances to centroids for each group
+print(bd)
+```
+
+# 3. PCoA of C15 Profiles (Dominant Profiles Only)
+
+Visualize phylogenetic distances between C15 profiles in ordination space
+
+```{r}
+#| fig-width: 8
+#| fig-height: 7
+#| dpi: 300
+
+# Load PCoA coordinates for UniFrac distances
+pcoa_coords <- read.csv(
+  "symportal_data/20260116T164045_hoongbe1/between_profile_distances/C/20260117T155228_unifrac_profiles_PCoA_coords_C_no_sqrt.csv",
+  row.names = 1
+)
+
+# Create profile name column from row names
+pcoa_coords$profile_name <- rownames(pcoa_coords)
+
+# Extract proportion of variance explained
+prop_var <- pcoa_coords[pcoa_coords$profile_name == "proportion_explained", c("PC1", "PC2")]
+pcoa_coords <- pcoa_coords[pcoa_coords$profile_name != "proportion_explained", ]
+
+# Filter to only C15 profiles (exclude C91 and C91h)
+c15_profiles <- !grepl("^C91", pcoa_coords$profile_name)
+excluded_profiles <- pcoa_coords$profile_name[!c15_profiles]
+pcoa_coords_c15 <- pcoa_coords[c15_profiles, ]
+
+# Convert PC columns to numeric
+pcoa_coords_c15$PC1 <- as.numeric(pcoa_coords_c15$PC1)
+pcoa_coords_c15$PC2 <- as.numeric(pcoa_coords_c15$PC2)
+
+# Load sample-profile mapping to classify profiles by habitat
+sample_profiles <- read.csv(
+  "symportal_data/20260116T164045_hoongbe1/its2_type_profiles/its2_type_profiles_absolute.csv",
+  row.names = 1,
+  check.names = FALSE
+)
+
+# Define habitat-based sample groups
+seaward_samples <- rownames(sample_profiles)[grepl("^ARM01", rownames(sample_profiles))]
+lagoon_samples <- rownames(sample_profiles)[grepl("^ARM09", rownames(sample_profiles))]
+
+# Classify each profile based on where it's found
+# A profile is "Seaward reef" if found only in seaward reef samples
+# "Lagoon" if found only in lagoon samples
+# "Both" if found in both lagoon and seaward reef samples
+classify_profile <- function(profile_name) {
+  if (!profile_name %in% colnames(sample_profiles)) {
+    return("Unknown")
+  }
+  
+  # Get samples where this profile is present (abundance > 0)
+  present_samples <- rownames(sample_profiles)[sample_profiles[, profile_name] > 0]
+  
+  in_seaward <- any(present_samples %in% seaward_samples)
+  in_lagoon <- any(present_samples %in% lagoon_samples)
+  
+  if (in_seaward && in_lagoon) {
+    return("Both")
+  } else if (in_seaward) {
+    return("Seaward reef")
+  } else if (in_lagoon) {
+    return("Lagoon")
+  } else {
+    return("Unknown")
+  }
+}
+
+# Apply classification to all C15 profiles
+pcoa_coords_c15$habitat_status <- sapply(pcoa_coords_c15$profile_name, classify_profile)
+
+cat("=== PCoA of C15 Profiles ===\n")
+cat("Total profiles (after removing proportion_explained):", nrow(pcoa_coords), "\n")
+cat("C15 profiles plotted:", nrow(pcoa_coords_c15), "\n")
+cat("Excluded profiles:", paste(excluded_profiles, collapse = ", "), "\n\n")
+
+cat("Profiles by habitat status:\n")
+print(table(pcoa_coords_c15$habitat_status))
+
+# Create PCoA plot with habitat status
+p_pcoa_profiles <- ggplot(pcoa_coords_c15, aes(x = PC1, y = PC2, fill = habitat_status)) +
+  geom_point(size = 3.5, alpha = 0.8, shape = 24, color = "black", stroke = 1.2) +
+  geom_text_repel(aes(label = profile_name), size = 4, max.overlaps = 20, nudge_x = 0,
+                  box.padding = 0.5, point.padding = 0.5, min.segment.length = 0.3,
+                  bg.color = "white", bg.r = 0.1, segment.size = 0.3) +
+  scale_fill_manual(
+    values = c("Seaward reef" = "#3498db", "Lagoon" = "#e74c3c", "Both" = "#f39c12"),
+    labels = c("Lagoon" = "Lagoon only", 
+               "Seaward reef" = "Seaward reef only",
+               "Both" = "Both sites")
+  ) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  labs(
+    x = paste0("PC1 (", round(as.numeric(prop_var$PC1) * 100, 1), "%)"),
+    y = paste0("PC2 (", round(as.numeric(prop_var$PC2) * 100, 1), "%)"),
+    fill = "Profile distribution"
+  ) +
+  theme_pubr(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = c(1, 0.05),
+    legend.justification = c(1, 0),
+    legend.text = element_text(size = 14, vjust = 0.5),
+    legend.background = element_rect(color = "black", fill = "white", linewidth = 0.3),
+    legend.margin = margin(4, 6, 4, 6),
+    legend.key = element_blank(),
+    legend.title = element_text(size = 14, face = "bold")
+  )
+
+print(p_pcoa_profiles)
+
+# Save plot
+ggsave("figures/pcoa_profiles_c15_unifrac.png", p_pcoa_profiles, width = 8, height = 7, dpi = 300)
+ggsave("figures/pcoa_profiles_c15_unifrac.svg", p_pcoa_profiles, width = 8, height = 7)
+```
+
+## Combined PCoA Panels
+
+```{r}
+#| fig-width: 15
+#| fig-height: 7
+#| dpi: 300
+
+p_pcoa_combined <- plot_grid(
+  p_pcoa,
+  NULL,
+  p_pcoa_profiles,
+  labels = c("A", "", "B"),
+  ncol = 3,
+  rel_widths = c(1, 0.12, 1),
+  align = "h"
+)
+
+print(p_pcoa_combined)
+
+ggsave("figures/pcoa_combined_panels.png", p_pcoa_combined, width = 15, height = 7, dpi = 300)
+ggsave("figures/pcoa_combined_panels.svg", p_pcoa_combined, width = 15, height = 7)
+```
+
+# 4. Calculating Bray-Curtis between samples
+
+```{r}
+#| fig-width: 7
+#| fig-height: 6
+#| dpi: 300
+
+# Load post-MED sequence relative abundance table
+seq_rel_abund <- read.csv(
+  here("symportal_data/20260116T164045_hoongbe1/post_med_seqs/seq_relative_abundance.csv"),
+  row.names = 1,
+  check.names = FALSE
+)
+
+# Calculate Bray-Curtis dissimilarity between samples
+seq_bray <- vegdist(seq_rel_abund, method = "bray")
+
+# Run PCoA
+seq_pcoa <- cmdscale(seq_bray, k = 2, eig = TRUE)
+var_explained <- seq_pcoa$eig / sum(seq_pcoa$eig[seq_pcoa$eig > 0])
+
+# Build coordinates table
+pcoa_coords_seq <- as.data.frame(seq_pcoa$points)
+colnames(pcoa_coords_seq) <- c("PC1", "PC2")
+pcoa_coords_seq$sample_name <- rownames(pcoa_coords_seq)
+
+# Assign sampling site based on sample prefix
+pcoa_coords_seq$site <- ifelse(grepl("^ARM01", pcoa_coords_seq$sample_name), "ARM01", "ARM09")
+
+# Add jitter to lagoon samples (ARM09) on x-axis for better visibility
+set.seed(1)
+jitter_amount <- 0.025
+pcoa_coords_seq$PC1_jittered <- pcoa_coords_seq$PC1
+lagoon_indices <- pcoa_coords_seq$site == "ARM09"
+pcoa_coords_seq$PC1_jittered[lagoon_indices] <- pcoa_coords_seq$PC1[lagoon_indices] +
+  runif(sum(lagoon_indices), -jitter_amount, jitter_amount)
+
+# Create PCoA plot in same style as p_pcoa
+p_pcoa_seq <- ggplot(pcoa_coords_seq, aes(x = PC1_jittered, y = PC2, fill = site)) +
+  geom_point(size = 3.5, alpha = 0.8, shape = 21, stroke = 1, color = "black") +
+  geom_text_repel(
+    data = subset(pcoa_coords_seq, sample_name == "ARM09-8"),
+    aes(label = "Colony 16"),
+    size = 4,
+    nudge_x = 0.05,
+    min.segment.length = 0,
+    nudge_y = 0.005,
+    box.padding = 0.6,
+    point.padding = 0.4,
+    segment.size = 0.3,
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(
+    values = c("ARM01" = "#3498db", "ARM09" = "#e74c3c"),
+    labels = c("ARM01" = "Seaward reef", "ARM09" = "Lagoon")
+  ) +
+  labs(
+    x = paste0("PC1 (", round(var_explained[1] * 100, 1), "%)"),
+    y = paste0("PC2 (", round(var_explained[2] * 100, 1), "%)"),
+    fill = "Colony origin"
+  ) +
+  theme_pubr(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    legend.position = c(1, 0.05),
+    legend.justification = c(1, 0),
+    legend.text = element_text(size = 14, vjust = 0.5),
+    legend.background = element_rect(color = "black", fill = "white", linewidth = 0.3),
+    legend.margin = margin(4, 6, 4, 6),
+    legend.key = element_blank(),
+    legend.title = element_text(size = 14, face = "bold")
+  )
+
+print(p_pcoa_seq)
+
+ggsave(here("figures/pcoa_all_seq_braycurtis.png"), p_pcoa_seq, width = 7, height = 6, dpi = 300)
+ggsave(here("figures/pcoa_all_seq_braycurtis.svg"), p_pcoa_seq, width = 7, height = 6)
+```
+
+## Combined PCoA Panels
+
+```{r}
+#| fig-width: 15
+#| fig-height: 7
+#| dpi: 300
+
+p_pcoa_combined <- plot_grid(
+  p_pcoa_seq,
+  NULL,
+  p_pcoa_profiles,
+  labels = c("A", "", "B"),
+  ncol = 3,
+  rel_widths = c(1, 0.025, 1),
+  align = "h"
+)
+
+print(p_pcoa_combined)
+
+ggsave("figures/pcoa_all_seq_combined.png", p_pcoa_combined, width = 15, height = 7, dpi = 300)
+ggsave("figures/pcoa_all_seq_combined.svg", p_pcoa_combined, width = 15, height = 7)
+```
+
+# 5. Rerun PERMANOVA and PERMDISP for all sequences
+
+```{r}
+# Use the Bray-Curtis distance matrix calculated from post-MED sequences in section 4
+seq_sample_names <- labels(seq_bray)
+seq_group <- ifelse(grepl("^ARM01", seq_sample_names), "ARM01", "ARM09")
+
+# Perform PERMANOVA (adonis2)
+seq_permanova_result <- adonis2(seq_bray ~ seq_group, permutations = 999)
+print(seq_permanova_result)
+```
+
+## PERMDISP Test
+
+```{r}
+# Perform betadisper analysis
+seq_bd <- betadisper(seq_bray, seq_group)
+
+# Visualise PERMDISP
+plot(seq_bd)
+
+# Test for significant differences in dispersion
+seq_permdisp_result <- permutest(seq_bd, permutations = 999)
+print(seq_permdisp_result)
+
+# Show mean distances to centroids for each group
+print(seq_bd)
+```
+
+# 6. Comparing ITS2 type profiles between lagoon and sea samples
+
+Are seaward reef profiles more different from each other than lagoon profiles? Short answer: yes observationally but no statistically
+
+### Load Profile Data
+
+```{r}
+# Load sample-profile mapping (keep original column names with dashes)
+sample_profiles <- read.csv(
+  here("symportal_data/20260116T164045_hoongbe1/its2_type_profiles/its2_type_profiles_absolute.csv"),
+  row.names = 1,
+  check.names = FALSE  # Preserve original column names with dashes
+)
+
+# Filter to only Clade C profiles (exclude Clade D)
+# Identify which profiles are Clade C vs D based on column names
+clade_c_profiles <- grep("^C", colnames(sample_profiles), value = TRUE)
+sample_profiles <- sample_profiles[, clade_c_profiles]
+
+cat("Sample-profile data dimensions (Clade C only):", dim(sample_profiles), "\n")
+cat("Number of Clade C profiles:", ncol(sample_profiles), "\n")
+cat("Profile names (first 10):\n")
+print(head(colnames(sample_profiles), 10))
+cat("\nFirst few samples and profiles:\n")
+print(sample_profiles[1:min(6, nrow(sample_profiles)), 1:min(6, ncol(sample_profiles))])
+
+# Create location mapping
+sample_locations <- data.frame(
+  sample = rownames(sample_profiles),
+  location = ifelse(grepl("^ARM01", rownames(sample_profiles)), "Seaward Reef", "Lagoon")
+)
+
+cat("\nSamples per location:\n")
+print(table(sample_locations$location))
+cat("\nNote: Analysis limited to Clade C profiles only\n")
+```
+
+### Load Profile Distance Matrix
+
+```{r}
+# Load UniFrac distance matrix between profiles
+profile_dist_matrix <- read.table(
+  here("symportal_data/20260116T164045_hoongbe1/between_profile_distances/C/20260117T155228_unifrac_profile_distances_C_no_sqrt.dist"),
+  header = FALSE,
+  sep = "\t",
+  row.names = 1
+)
+
+# Clean up: remove UID column (column 1) and convert to numeric matrix
+profile_names <- rownames(profile_dist_matrix)
+profile_dist_matrix <- as.matrix(profile_dist_matrix[, -1])
+colnames(profile_dist_matrix) <- profile_names
+rownames(profile_dist_matrix) <- profile_names
+
+# Convert to distance object for later use
+profile_dist <- as.dist(profile_dist_matrix)
+
+cat("Profile distance matrix loaded\n")
+cat("Distance matrix dimensions:", nrow(profile_dist_matrix), "x", ncol(profile_dist_matrix), "\n")
+cat("Profile names (first 10):", paste(colnames(profile_dist_matrix)[1:min(10, ncol(profile_dist_matrix))], collapse = ", "), "\n")
+```
+
+### Identify Profiles Present at Each Location
+
+```{r}
+# For each location, find which profiles are present (abundance > 0)
+seaward_samples <- sample_locations$sample[sample_locations$location == "Seaward Reef"]
+lagoon_samples <- sample_locations$sample[sample_locations$location == "Lagoon"]
+
+# Get profiles present in each location (any sample with abundance > 0)
+seaward_profiles <- colnames(sample_profiles)[
+  colSums(sample_profiles[seaward_samples, , drop = FALSE] > 0) > 0
+]
+lagoon_profiles <- colnames(sample_profiles)[
+  colSums(sample_profiles[lagoon_samples, , drop = FALSE] > 0) > 0
+]
+
+# Check which profiles exist in the distance matrix
+profiles_in_dist <- colnames(profile_dist_matrix)
+
+# Filter to only profiles that exist in distance matrix
+seaward_profiles <- seaward_profiles[seaward_profiles %in% profiles_in_dist]
+lagoon_profiles <- lagoon_profiles[lagoon_profiles %in% profiles_in_dist]
+
+cat("Seaward Reef:\n")
+cat("  Number of profiles:", length(seaward_profiles), "\n")
+cat("  Profile names:", paste(seaward_profiles, collapse = ", "), "\n\n")
+
+cat("Lagoon:\n")
+cat("  Number of profiles:", length(lagoon_profiles), "\n")
+cat("  Profile names:", paste(lagoon_profiles, collapse = ", "), "\n\n")
+
+# Shared vs unique profiles
+shared_profiles <- intersect(seaward_profiles, lagoon_profiles)
+unique_seaward <- setdiff(seaward_profiles, lagoon_profiles)
+unique_lagoon <- setdiff(lagoon_profiles, seaward_profiles)
+
+cat("Shared profiles:", length(shared_profiles), "\n")
+cat("Unique to Seaward Reef:", length(unique_seaward), "\n")
+cat("Unique to Lagoon:", length(unique_lagoon), "\n")
+```
+
+### Calculate Mean Pairwise Phylogenetic Distance
+
+```{r}
+# Function to calculate mean pairwise distance for a set of profiles
+calculate_mean_pairwise_distance <- function(profiles, dist_matrix) {
+  # Convert to matrix if needed
+  if (inherits(dist_matrix, "dist")) {
+    dist_matrix <- as.matrix(dist_matrix)
+  }
+  
+  # Subset distance matrix to only include profiles present
+  subset_dist <- dist_matrix[profiles, profiles]
+  
+  # Extract upper triangle (excluding diagonal)
+  pairwise_dists <- subset_dist[upper.tri(subset_dist)]
+  
+  if (length(pairwise_dists) == 0) {
+    return(NA)
+  }
+  
+  return(mean(pairwise_dists))
+}
+
+# Calculate for each location (using all profiles present)
+seaward_mean_dist <- calculate_mean_pairwise_distance(seaward_profiles, profile_dist_matrix)
+lagoon_mean_dist <- calculate_mean_pairwise_distance(lagoon_profiles, profile_dist_matrix)
+
+cat("=== Mean Pairwise Phylogenetic Distance ===\n\n")
+cat("Seaward Reef profiles:\n")
+cat("  Mean UniFrac distance:", round(seaward_mean_dist, 4), "\n")
+cat("  Number of pairwise comparisons:", choose(length(seaward_profiles), 2), "\n\n")
+
+cat("Lagoon profiles:\n")
+cat("  Mean UniFrac distance:", round(lagoon_mean_dist, 4), "\n")
+cat("  Number of pairwise comparisons:", choose(length(lagoon_profiles), 2), "\n\n")
+
+cat("Difference (Seaward - Lagoon):", round(seaward_mean_dist - lagoon_mean_dist, 4), "\n")
+cat("Percent difference:", round((seaward_mean_dist - lagoon_mean_dist) / lagoon_mean_dist * 100, 1), "%\n")
+```
+
+### Statistical Test: Permutation Test
+
+```{r}
+# Permutation test: randomize profile assignment to locations and compare distances
+set.seed(123)
+n_perms <- 9999
+
+# Store all profiles
+all_profiles <- colnames(sample_profiles)
+
+# Calculate observed difference
+obs_diff <- seaward_mean_dist - lagoon_mean_dist
+
+# Run permutation test
+perm_diffs <- numeric(n_perms)
+
+for (i in 1:n_perms) {
+  # Randomly permute profile assignments to locations
+  perm_seaward <- sample(all_profiles, size = length(seaward_profiles), replace = FALSE)
+  perm_lagoon <- setdiff(all_profiles, perm_seaward)
+  
+  # Calculate mean distances for permuted data
+  perm_seaward_dist <- calculate_mean_pairwise_distance(perm_seaward, profile_dist_matrix)
+  perm_lagoon_dist <- calculate_mean_pairwise_distance(perm_lagoon, profile_dist_matrix)
+  
+  perm_diffs[i] <- perm_seaward_dist - perm_lagoon_dist
+}
+
+# Calculate p-value (two-tailed)
+p_value <- mean(abs(perm_diffs) >= abs(obs_diff))
+
+cat("=== Permutation Test Results ===\n\n")
+cat("Observed difference (Seaward - Lagoon):", round(obs_diff, 4), "\n")
+cat("Number of permutations:", n_perms, "\n")
+cat("Two-tailed p-value:", p_value, "\n\n")
+
+if (p_value < 0.05) {
+  cat("RESULT: Seaward Reef profiles are SIGNIFICANTLY different in phylogenetic distance\n")
+  cat("        compared to Lagoon profiles (p <", p_value, ")\n")
+} else {
+  cat("RESULT: No significant difference in phylogenetic distance between locations\n")
+  cat("        (p =", p_value, ")\n")
+}
+```
+
+### Visualize Distribution of Distances
+
+```{r}
+#| fig-width: 10
+#| fig-height: 5
+#| dpi: 300
+
+# Create data frame for visualization
+perm_results <- data.frame(
+  diff = perm_diffs,
+  type = "Permuted"
+)
+
+obs_results <- data.frame(
+  diff = obs_diff,
+  type = "Observed"
+)
+
+# Plot 1: Histogram of permuted differences
+p1 <- ggplot(perm_results, aes(x = diff, fill = type)) +
+  geom_histogram(bins = 50, alpha = 0.7, color = "black") +
+  geom_vline(xintercept = obs_diff, color = "red", linetype = "dashed", linewidth = 1.5) +
+  scale_fill_manual(values = c("Permuted" = "lightblue")) +
+  labs(
+    title = "Permutation Test: Difference in Mean Pairwise Distances",
+    subtitle = "Red line = observed difference",
+    x = "Seaward Mean Distance - Lagoon Mean Distance",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Plot 2: Box plot comparing distances
+compare_data <- data.frame(
+  location = c(rep("Seaward Reef", length(seaward_profiles)), 
+               rep("Lagoon", length(lagoon_profiles))),
+  profile = c(seaward_profiles, lagoon_profiles),
+  mean_dist = c(rep(seaward_mean_dist, length(seaward_profiles)),
+                rep(lagoon_mean_dist, length(lagoon_profiles)))
+)
+
+p2 <- ggplot(compare_data, aes(x = location, y = mean_dist, fill = location)) +
+  geom_col(alpha = 0.7) +
+  scale_fill_manual(values = c("Seaward Reef" = "#3498db", "Lagoon" = "#e74c3c")) +
+  labs(
+    title = "Mean Pairwise Phylogenetic Distance by Location",
+    x = "",
+    y = "Mean UniFrac Distance"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggarrange(p1, p2, ncol = 2)
+```

@@ -1,0 +1,1190 @@
+---
+title: "Meta-Analysis of Porites lobata/lutea Symbiont Associations"
+author: "Benaiah Hoong"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+editor: source
+---
+
+# Set Up Project
+## Load Libraries
+```{r setup, include=FALSE}
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(vegan)
+library(ggrepel)
+library(here)
+library(maps)
+library(cowplot)
+```
+
+## Load Data
+```{r load-data}
+# Load sample metadata
+sample_metadata <- read_excel("symportal_meta_analysis/sample_metadata_aldabra.xlsx")
+
+# Load profile matrix
+profile_matrix <- read_excel("symportal_meta_analysis/r_processed_profile_matrix.xlsx")
+
+# Load Bray-Curtis between sample PCoA coordinates
+between_sample_no_sqrt_pcoa <- read.csv("symportal_meta_analysis/analysis_output/manual_braycurtis_samples_PCoA_coords_no_sqrt.csv")
+between_sample_sqrt_pcoa <- read.csv("symportal_meta_analysis/analysis_output/manual_braycurtis_samples_PCoA_coords_sqrt.csv")
+
+# Load C15 profile metadata
+c15_profile_metadata <- read_excel("symportal_meta_analysis/analysis_output/c15_profile_metadata.xlsx")
+
+# Load UniFrac between C15 profile PCoA coordinates
+between_profile_no_sqrt_pcoa <- read.csv("symportal_meta_analysis/analysis_output/manual_unifrac_profiles_PCoA_coords_C15_no_sqrt.csv")
+between_profile_sqrt_pcoa <- read.csv("symportal_meta_analysis/analysis_output/manual_unifrac_profiles_PCoA_coords_C15_sqrt.csv")
+
+# Load sample-profile list
+sample_profile_list <- read_excel("symportal_meta_analysis/analysis_output/sample_profile_list.xlsx", col_types = "text")
+```
+
+# 1. Plot Sampling Map by Region
+```{r map-sampled-sites-by-region}
+required_map_cols_region <- c("sample_id", "lat", "lon", "region")
+missing_map_cols_region <- setdiff(required_map_cols_region, names(sample_metadata))
+
+if (length(missing_map_cols_region) > 0) {
+  stop(paste("Missing required columns for mapping:", paste(missing_map_cols_region, collapse = ", ")))
+}
+
+if (!requireNamespace("maps", quietly = TRUE)) {
+  stop("Package 'maps' is required for plotting coastlines. Install with install.packages('maps').")
+}
+
+map_sites_region <- sample_metadata[, required_map_cols_region, drop = FALSE]
+map_sites_region$lat <- suppressWarnings(as.numeric(map_sites_region$lat))
+map_sites_region$lon <- suppressWarnings(as.numeric(map_sites_region$lon))
+
+map_sites_region <- map_sites_region[
+  !is.na(map_sites_region$region) & map_sites_region$region != "" &
+    is.finite(map_sites_region$lat) & is.finite(map_sites_region$lon),
+  ,
+  drop = FALSE
+]
+
+if (nrow(map_sites_region) == 0) {
+  stop("No valid rows with region, lat, and lon found for mapping.")
+}
+
+map_sites_region$lon_pacific <- ifelse(map_sites_region$lon < 0, map_sites_region$lon + 360, map_sites_region$lon)
+
+region_centroids <- aggregate(cbind(lat, lon_pacific) ~ region, data = map_sites_region, FUN = mean)
+region_counts <- as.data.frame(table(map_sites_region$region), stringsAsFactors = FALSE)
+names(region_counts) <- c("region", "sample_size")
+region_centroids <- merge(region_centroids, region_counts, by = "region", all.x = TRUE)
+
+region_order <- c("RS", "WIO", "NIO", "WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP")
+observed_regions <- unique(as.character(region_centroids$region))
+region_order_full <- c(region_order, setdiff(observed_regions, region_order))
+region_centroids$region <- factor(as.character(region_centroids$region), levels = region_order_full)
+
+region_palette <- setNames(
+  grDevices::hcl.colors(length(region_order_full), palette = "Dark 3"),
+  region_order_full
+)
+
+world_map_region <- ggplot2::map_data("world")
+world_map_region <- world_map_region[order(world_map_region$group, world_map_region$order), ]
+world_map_region$long_pacific <- ifelse(world_map_region$long < 0, world_map_region$long + 360, world_map_region$long)
+world_map_region$group_pacific <- interaction(
+  world_map_region$group,
+  ave(
+    world_map_region$long_pacific,
+    world_map_region$group,
+    FUN = function(x) cumsum(c(0, abs(diff(x)) > 180))
+  ),
+  drop = TRUE
+)
+
+format_lon_deg <- function(x) {
+  x_signed <- ifelse(x > 180, x - 360, x)
+  hemi <- ifelse(x_signed < 0, "W", ifelse(x_signed > 0, "E", ""))
+  paste0(abs(round(x_signed)), "°", hemi)
+}
+
+format_lat_deg <- function(y) {
+  hemi <- ifelse(y < 0, "S", ifelse(y > 0, "N", ""))
+  paste0(abs(round(y)), "°", hemi)
+}
+
+p_map_region <- ggplot() +
+  geom_polygon(
+    data = world_map_region,
+    aes(x = long_pacific, y = lat, group = group_pacific),
+    fill = "grey92",
+    color = "grey70",
+    linewidth = 0.2
+  ) +
+  geom_point(
+    data = region_centroids,
+    aes(x = lon_pacific, y = lat, fill = region),
+    shape = 21,
+    color = "black",
+    stroke = 0.4,
+    size = 4,
+    show.legend = FALSE
+  ) +
+  geom_text(
+    data = region_centroids,
+    aes(x = lon_pacific, y = lat, label = paste0(region, " (n=", sample_size, ")")),
+    nudge_y = 4.5,
+    size = 4,
+    check_overlap = FALSE
+  ) +
+  coord_quickmap(xlim = c(20, 300), ylim = c(-60, 60), expand = FALSE) +
+  scale_x_continuous(
+    breaks = seq(20, 300, by = 40),
+    labels = format_lon_deg
+  ) +
+  scale_y_continuous(
+    breaks = seq(-60, 60, by = 20),
+    labels = format_lat_deg
+  ) +
+  scale_fill_manual(values = region_palette, drop = FALSE, breaks = region_order) +
+  labs(
+    title = "",
+    x = "",
+    y = "",
+    fill = "Region"
+  ) +
+  theme_pubr() +
+  theme(
+    panel.background = element_rect(fill = "#FFFFFF", color = NA),
+    axis.title = element_blank(),
+    axis.text = element_text(color = "black", size = 12),
+    axis.ticks = element_line(color = "black", linewidth = 0.3),
+    axis.line = element_line(color = "black", linewidth = 0.3),
+    legend.position = "none",
+    plot.margin = margin(0, 15, 0, 0)
+  )
+
+print(p_map_region)
+
+ggsave(here("figures/map_region_centroids.png"), p_map_region, width = 10, height = 6, dpi = 300)
+ggsave(here("figures/map_region_centroids.svg"), p_map_region, width = 10, height = 6)
+```
+
+
+# 2. Sort and Visualise Data by Genus
+
+## Data Preparation
+
+```{r prepare-data}
+# Convert profile matrix to long format
+profile_long <- profile_matrix %>%
+  pivot_longer(cols = -sample_id, 
+               names_to = "its2_profile", 
+               values_to = "relative_abundance") %>%
+  filter(relative_abundance > 0)  # Remove zero abundances
+
+# Join with sample metadata
+data_combined <- profile_long %>%
+  left_join(sample_metadata, by = "sample_id")
+
+# Check for missing region data
+cat("Samples with missing region:", sum(is.na(data_combined$region)), "\n")
+
+# Summary by region
+region_summary <- data_combined %>%
+  group_by(region) %>%
+  summarise(
+    n_studies = n_distinct(study_id),
+    n_samples = n_distinct(sample_id),
+    n_profiles = n_distinct(its2_profile),
+    mean_abundance = mean(relative_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_samples))
+
+print(region_summary)
+```
+
+## Sort Data by Genus
+
+```{r extract-genera}
+# Extract genera from ITS2 profiles based on first character
+genus_summary <- data_combined %>%
+  distinct(its2_profile) %>%
+  mutate(
+    profile_upper = str_to_upper(its2_profile),
+    first_char = str_to_upper(str_sub(its2_profile, 1, 1)),
+    genus = case_when(
+      first_char == "A" ~ "Symbiodinium",
+      first_char == "B" ~ "Breviolum",
+      first_char == "C" & str_detect(profile_upper, "^C15($|[^0-9])") ~ "Cladocopium (C15)",
+      first_char == "C" ~ "Cladocopium (others)",
+      first_char == "D" ~ "Durusdinium",
+      first_char == "G" ~ "Gerakladium",
+      str_detect(first_char, "^[0-9]$") ~ "Unknown",
+      TRUE ~ "Unknown"
+    )
+  ) %>%
+  group_by(genus) %>%
+  summarise(
+    n_profiles = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_profiles))
+
+print(genus_summary)
+```
+
+```{r collapse-to-genera}
+# Collapse relative abundances from profile level to genus level
+data_genus <- data_combined %>%
+  mutate(
+    profile_upper = str_to_upper(its2_profile),
+    first_char = str_to_upper(str_sub(its2_profile, 1, 1)),
+    genus = case_when(
+      first_char == "A" ~ "Symbiodinium",
+      first_char == "B" ~ "Breviolum",
+      first_char == "C" & str_detect(profile_upper, "^C15($|[^0-9])") ~ "Cladocopium (C15)",
+      first_char == "C" ~ "Cladocopium (others)",
+      first_char == "D" ~ "Durusdinium",
+      first_char == "G" ~ "Gerakladium",
+      str_detect(first_char, "^[0-9]$") ~ "Unknown",
+      TRUE ~ "Unknown"
+    )
+  ) %>%
+  group_by(sample_id, genus) %>%
+  summarise(
+    relative_abundance = sum(relative_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Re-join with metadata to keep region and study info
+  left_join(
+    data_combined %>% select(sample_id, region, study_id) %>% distinct(),
+    by = "sample_id"
+  )
+
+# Check the structure
+cat("Genus-collapsed data dimensions:", dim(data_genus), "\n")
+cat("Unique genera:", n_distinct(data_genus$genus), "\n")
+head(data_genus)
+```
+
+## Genus by Region Summary
+
+```{r summarise-genus-by-region}
+# Summarize genus relative abundance by region
+genus_by_region <- data_genus %>%
+  group_by(region, genus) %>%
+  summarise(
+    total_abundance = sum(relative_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(region) %>%
+  mutate(
+    region_total_abundance = sum(total_abundance),
+    relative_abundance_proportion = total_abundance / region_total_abundance
+  ) %>%
+  ungroup() %>%
+  select(region, genus, total_abundance, relative_abundance_proportion) %>%
+  arrange(region, desc(relative_abundance_proportion))
+
+print(genus_by_region)
+```
+
+```{r plot-genus-stacked-barplot, fig.width=10, fig.height=6}
+# Order genera by total abundance (least abundant first for bottom placement)
+genus_order <- genus_by_region %>%
+  group_by(genus) %>%
+  summarise(total_abundance = sum(total_abundance), .groups = "drop") %>%
+  arrange(total_abundance) %>%
+  pull(genus)
+
+# Convert genus to factor with abundance-ordered levels for stacking
+genus_by_region_ordered <- genus_by_region %>%
+  mutate(genus = factor(genus, levels = genus_order))
+
+# Build color palette as named vector
+genus_color_palette <- c(
+  "Symbiodinium" = "#0173B2",
+  "Breviolum" = "#DE8F05",
+  "Cladocopium (C15)" = "#029E73",
+  "Cladocopium (others)" = "#56B4A9",
+  "Durusdinium" = "#D45087",
+  "Gerakladium" = "#D4B020",
+  "Unknown" = "#999999"
+)
+
+# Keep only genera that exist in the data and align to plotting order
+genus_color_palette <- genus_color_palette[genus_order]
+
+# Fixed order for legend
+preferred_legend_order <- c(
+  "Symbiodinium",
+  "Breviolum",
+  "Cladocopium (C15)",
+  "Cladocopium (others)",
+  "Durusdinium",
+  "Gerakladium"
+)
+genus_legend_order <- c(
+  intersect(preferred_legend_order, unique(genus_by_region$genus)),
+  setdiff(unique(genus_by_region$genus), preferred_legend_order)
+)
+
+genus_legend_labels <- c(
+  "Symbiodinium" = "italic('Symbiodinium')",
+  "Breviolum" = "italic('Breviolum')",
+  "Cladocopium (C15)" = "italic('Cladocopium')~'(C15)'",
+  "Cladocopium (others)" = "italic('Cladocopium')~'(others)'",
+  "Durusdinium" = "italic('Durusdinium')",
+  "Gerakladium" = "italic('Gerakladium')",
+  "Unknown" = "Unknown"
+)
+
+# Calculate sample size per region
+genus_sample_sizes <- data_genus %>%
+  group_by(region) %>%
+  summarise(n_samples = n_distinct(sample_id), .groups = "drop")
+
+# Reorder regions by geography
+region_order <- c("RS", "WIO", "NIO", "WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP")
+
+# Add geographic grouping for faceting
+genus_by_region_ordered <- genus_by_region_ordered %>%
+  mutate(
+    region = factor(region, levels = region_order),
+    geo_group = case_when(
+      region %in% c("RS", "WIO", "NIO") ~ "Indian Ocean",
+      region %in% c("WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP") ~ "Pacific Ocean",
+      TRUE ~ "Other"
+    ),
+    geo_group = factor(geo_group, levels = c("Indian Ocean", "Pacific Ocean"))
+  ) %>%
+  left_join(genus_sample_sizes, by = "region") %>%
+  mutate(region = factor(region, levels = region_order))
+
+# Create stacked bar chart with geographic grouping and gaps
+p_meta_regional_genus <- ggplot(genus_by_region_ordered, aes(x = region, y = relative_abundance_proportion, fill = genus)) +
+  geom_col(position = "stack") +
+  facet_grid(~geo_group, scales = "free_x", space = "free_x", switch = "x") +
+  scale_fill_manual(
+    values = genus_color_palette,
+    breaks = genus_legend_order,
+    labels = parse(text = genus_legend_labels[genus_legend_order])
+  ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.01)) +
+  labs(
+    x = NULL,
+    y = "Relative Abundance",
+    fill = "Genus"
+  ) +
+  theme_pubr() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    legend.text = element_text(face = "plain"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16, face = "bold"),
+    strip.placement = "outside",
+    panel.spacing.x = unit(8, "mm"),
+    legend.title = element_text(face = "bold")
+  )
+
+print(p_meta_regional_genus)
+
+ggsave(here("figures/stacked_bar_meta_regional_genus.png"), p_meta_regional_genus, width = 10, height = 6, dpi = 300)
+ggsave(here("figures/stacked_bar_meta_regional_genus.svg"), p_meta_regional_genus, width = 10, height = 6)
+```
+
+## Combine Map and Genus Plot
+
+```{r combine-map-and-genus-plot, fig.width=10, fig.height=12}
+
+p_meta_map_genus_combined <- plot_grid(
+  p_map_region,
+  p_meta_regional_genus,
+  labels = c("A", "B"),
+  ncol = 1,
+  align = "v",
+  axis = "l",
+  rel_heights = c(0.7, 1)
+)
+
+print(p_meta_map_genus_combined)
+
+ggsave(here("figures/meta_map_genus_combined.png"), p_meta_map_genus_combined, width = 10, height = 12, dpi = 300)
+ggsave(here("figures/meta_map_genus_combined.svg"), p_meta_map_genus_combined, width = 10, height = 12)
+```
+
+
+# 3. PCoA of Bray-Curtis Distances Between Samples
+```{r plot-between-sample-pcoa-by-region, fig.width=8, fig.height=6}
+# Standardize manual PCoA files to sample_id, PC1, PC2 and capture % explained
+prepare_between_sample_pcoa <- function(df) {
+  required_cols <- c("sample_id", "Axis.1", "Axis.2")
+  missing_cols <- setdiff(required_cols, names(df))
+  if (length(missing_cols) > 0) {
+    stop(paste("Missing required columns in PCoA coordinates:", paste(missing_cols, collapse = ", ")))
+  }
+
+  out_raw <- df %>%
+    transmute(
+      sample_id = as.character(sample_id),
+      PC1 = suppressWarnings(as.numeric(Axis.1)),
+      PC2 = suppressWarnings(as.numeric(Axis.2))
+    )
+
+  # In exported manual PCoA files, sample_id == 0 stores proportion explained by axis
+  var_row <- out_raw %>%
+    filter(sample_id == "0") %>%
+    slice_tail(n = 1)
+
+  pc1_var <- if (nrow(var_row) == 1) var_row$PC1[[1]] else NA_real_
+  pc2_var <- if (nrow(var_row) == 1) var_row$PC2[[1]] else NA_real_
+
+  out <- out_raw %>%
+    filter(sample_id != "0") %>%
+    filter(is.finite(PC1), is.finite(PC2), !is.na(sample_id), sample_id != "")
+
+  list(data = out, pc1_var = pc1_var, pc2_var = pc2_var)
+}
+
+plot_between_sample_pcoa <- function(pcoa_df, title_text, output_prefix) {
+  pcoa_prepped <- prepare_between_sample_pcoa(pcoa_df)
+  pcoa_clean <- pcoa_prepped$data
+
+  x_lab <- "PC1"
+  y_lab <- "PC2"
+  if (is.finite(pcoa_prepped$pc1_var)) {
+    x_lab <- paste0("PC1 (", round(100 * pcoa_prepped$pc1_var, 1), "%)")
+  }
+  if (is.finite(pcoa_prepped$pc2_var)) {
+    y_lab <- paste0("PC2 (", round(100 * pcoa_prepped$pc2_var, 1), "%)")
+  }
+
+  metadata_region <- sample_metadata %>%
+    transmute(
+      sample_id = as.character(sample_id),
+      region = as.character(region)
+    )
+
+  pcoa_with_region <- pcoa_clean %>%
+    inner_join(metadata_region, by = "sample_id") %>%
+    filter(!is.na(region), region != "")
+
+  if (nrow(pcoa_with_region) == 0) {
+    stop("No overlapping sample_id values with non-missing region between PCoA coordinates and sample_metadata.")
+  }
+
+  region_order <- c("RS", "WIO", "NIO", "WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP")
+  observed_regions <- unique(pcoa_with_region$region)
+  region_order_full <- c(region_order, setdiff(observed_regions, region_order))
+
+  pcoa_with_region <- pcoa_with_region %>%
+    mutate(region = factor(region, levels = region_order_full))
+
+  region_palette <- setNames(
+    grDevices::hcl.colors(length(region_order_full), palette = "Dark 3"),
+    region_order_full
+  )
+
+  p <- ggplot(pcoa_with_region, aes(x = PC1, y = PC2, color = region)) +
+    geom_point(size = 2, alpha = 0.7) +
+    stat_ellipse(aes(group = region), type = "t", level = 0.68, linewidth = 0.5, alpha = 0.7, show.legend = FALSE) +
+    scale_color_manual(values = region_palette, drop = FALSE) +
+    guides(color = guide_legend(ncol = 1, byrow = FALSE)) +
+    labs(
+      title = NULL,
+      x = x_lab,
+      y = y_lab,
+      color = "Region"
+    ) +
+    theme_pubr(base_size = 14) +
+    theme(
+      legend.position = "right",
+      legend.justification = c(0.5, 0),
+      legend.box.just = "bottom",
+      legend.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 12)
+    )
+
+  print(p)
+
+  ggsave(here(paste0("figures/", output_prefix, ".png")), p, width = 8, height = 6, dpi = 300)
+  ggsave(here(paste0("figures/", output_prefix, ".svg")), p, width = 8, height = 6)
+
+  invisible(p)
+}
+
+p_between_sample_no_sqrt <- plot_between_sample_pcoa(
+  between_sample_no_sqrt_pcoa,
+  title_text = "PCoA of Bray-Curtis Distances Between Samples (No sqrt)",
+  output_prefix = "pcoa_between_samples_region_no_sqrt"
+)
+
+p_between_sample_sqrt <- plot_between_sample_pcoa(
+  between_sample_sqrt_pcoa,
+  title_text = "PCoA of Bray-Curtis Distances Between Samples (Sqrt)",
+  output_prefix = "pcoa_between_samples_region_sqrt"
+)
+```
+
+# 4. PCoA of UniFrac Distances Between C15 Profiles
+```{r plot-between-profile-pcoa-by-region, fig.width=8, fig.height=6}
+# Standardize manual UniFrac PCoA files to profile_id, PC1, PC2 and capture % explained
+prepare_between_profile_pcoa <- function(df) {
+  required_cols <- c("analysis_type_uid", "Axis.1", "Axis.2")
+  missing_cols <- setdiff(required_cols, names(df))
+  if (length(missing_cols) > 0) {
+    stop(paste("Missing required columns in profile PCoA coordinates:", paste(missing_cols, collapse = ", ")))
+  }
+
+  out_raw <- df %>%
+    transmute(
+      profile_id = as.character(analysis_type_uid),
+      PC1 = suppressWarnings(as.numeric(Axis.1)),
+      PC2 = suppressWarnings(as.numeric(Axis.2))
+    )
+
+  # In exported manual PCoA files, analysis_type_uid == 0 stores proportion explained
+  var_row <- out_raw %>%
+    filter(profile_id == "0") %>%
+    slice_tail(n = 1)
+
+  pc1_var <- if (nrow(var_row) == 1) var_row$PC1[[1]] else NA_real_
+  pc2_var <- if (nrow(var_row) == 1) var_row$PC2[[1]] else NA_real_
+
+  out <- out_raw %>%
+    filter(profile_id != "0") %>%
+    filter(is.finite(PC1), is.finite(PC2), !is.na(profile_id), profile_id != "")
+
+  list(data = out, pc1_var = pc1_var, pc2_var = pc2_var)
+}
+
+plot_between_profile_pcoa <- function(pcoa_df, output_prefix) {
+  pcoa_prepped <- prepare_between_profile_pcoa(pcoa_df)
+  pcoa_clean <- pcoa_prepped$data
+
+  x_lab <- "PC1"
+  y_lab <- "PC2"
+  if (is.finite(pcoa_prepped$pc1_var)) {
+    x_lab <- paste0("PC1 (", round(100 * pcoa_prepped$pc1_var, 1), "%)")
+  }
+  if (is.finite(pcoa_prepped$pc2_var)) {
+    y_lab <- paste0("PC2 (", round(100 * pcoa_prepped$pc2_var, 1), "%)")
+  }
+
+  required_meta_cols <- c("ITS2_profile", "region")
+  missing_meta_cols <- setdiff(required_meta_cols, names(c15_profile_metadata))
+  if (length(missing_meta_cols) > 0) {
+    stop(paste("Missing required columns in c15_profile_metadata:", paste(missing_meta_cols, collapse = ", ")))
+  }
+
+  metadata_region <- c15_profile_metadata %>%
+    transmute(
+      profile_id = as.character(ITS2_profile),
+      region = as.character(region)
+    ) %>%
+    distinct(profile_id, region)
+
+  pcoa_with_region <- pcoa_clean %>%
+    inner_join(metadata_region, by = "profile_id") %>%
+    filter(!is.na(region), region != "")
+
+  if (nrow(pcoa_with_region) == 0) {
+    stop("No overlapping profile IDs with non-missing region between profile PCoA coordinates and c15_profile_metadata.")
+  }
+
+  region_order <- c("RS", "WIO", "NIO", "WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP")
+  observed_regions <- unique(pcoa_with_region$region)
+  region_order_full <- c(region_order, setdiff(observed_regions, region_order))
+
+  pcoa_with_region <- pcoa_with_region %>%
+    mutate(region = factor(region, levels = region_order_full))
+
+  # Compute ellipses only for regions represented by at least 8 profiles
+  ellipse_df <- pcoa_with_region %>%
+    add_count(region, name = "n_region") %>%
+    filter(n_region >= 8)
+
+  region_palette <- setNames(
+    grDevices::hcl.colors(length(region_order_full), palette = "Dark 3"),
+    region_order_full
+  )
+
+  p <- ggplot(pcoa_with_region, aes(x = PC1, y = PC2, color = region)) +
+    geom_point(size = 2, alpha = 0.7, shape = 17) +
+    stat_ellipse(data = ellipse_df, aes(group = region), type = "t", level = 0.68, linewidth = 0.5, alpha = 0.7, show.legend = FALSE) +
+    scale_color_manual(values = region_palette, drop = FALSE) +
+    guides(color = guide_legend(ncol = 1, byrow = FALSE)) +
+    labs(
+      title = NULL,
+      x = x_lab,
+      y = y_lab,
+      color = "Region"
+    ) +
+    theme_pubr(base_size = 14) +
+    theme(
+      legend.position = "right",
+      legend.justification = c(0.5, 0),
+      legend.box.just = "bottom",
+      legend.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 12)
+    )
+
+  print(p)
+
+  ggsave(here(paste0("figures/", output_prefix, ".png")), p, width = 8, height = 6, dpi = 300)
+  ggsave(here(paste0("figures/", output_prefix, ".svg")), p, width = 8, height = 6)
+
+  invisible(p)
+}
+
+p_between_profile_no_sqrt <- plot_between_profile_pcoa(
+  between_profile_no_sqrt_pcoa,
+  output_prefix = "pcoa_between_profiles_region_no_sqrt"
+)
+
+p_between_profile_sqrt <- plot_between_profile_pcoa(
+  between_profile_sqrt_pcoa,
+  output_prefix = "pcoa_between_profiles_region_sqrt"
+)
+```
+
+# 5. Combine PCoA Plots
+```{r combine-pcoa-plots, fig.width=16, fig.height=7}
+p_meta_pcoa_combined <- plot_grid(
+  p_between_sample_no_sqrt,
+  NULL,
+  p_between_profile_no_sqrt,
+  labels = c("A", "", "B"),
+  ncol = 3,
+  rel_widths = c(1, 0.025, 1),
+  align = "h"
+)
+
+print(p_meta_pcoa_combined)
+
+ggsave("figures/pcoa_meta_combined_panels.png", p_meta_pcoa_combined, width = 16, height = 7, dpi = 300)
+ggsave("figures/pcoa_meta_combined_panels.svg", p_meta_pcoa_combined, width = 16, height = 7)
+```
+
+# 6. C15 Profile Overlap Between Regions
+```{r shared-profile-matrix-by-region}
+required_cols_overlap <- c("region", "ITS2_profile")
+missing_cols_overlap <- setdiff(required_cols_overlap, names(c15_profile_metadata))
+
+if (length(missing_cols_overlap) > 0) {
+  stop(paste("Missing required columns in c15_profile_metadata:", paste(missing_cols_overlap, collapse = ", ")))
+}
+
+overlap_df <- c15_profile_metadata %>%
+  transmute(
+    region = stringr::str_trim(as.character(region)),
+    ITS2_profile = stringr::str_trim(as.character(ITS2_profile))
+  ) %>%
+  filter(!is.na(region), region != "", !is.na(ITS2_profile), ITS2_profile != "") %>%
+  distinct(region, ITS2_profile)
+
+if (nrow(overlap_df) == 0) {
+  stop("No valid region/profile rows found in c15_profile_metadata.")
+}
+
+preferred_region_order <- c("RS", "WIO", "NIO", "WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP")
+region_names <- unique(overlap_df$region)
+region_names <- c(preferred_region_order[preferred_region_order %in% region_names],
+                  setdiff(region_names, preferred_region_order))
+
+# Binary profile x region incidence matrix
+incidence <- overlap_df %>%
+  mutate(present = 1L) %>%
+  tidyr::pivot_wider(
+    names_from = region,
+    values_from = present,
+    values_fill = 0L
+  )
+
+profiles <- incidence$ITS2_profile
+inc_mat <- as.matrix(incidence[, setdiff(names(incidence), "ITS2_profile"), drop = FALSE])
+storage.mode(inc_mat) <- "integer"
+colnames(inc_mat) <- setdiff(names(incidence), "ITS2_profile")
+
+# Reorder columns to preferred region order before overlap calculation
+inc_mat <- inc_mat[, region_names, drop = FALSE]
+
+# Region x region shared-profile counts
+shared_mat <- t(inc_mat) %*% inc_mat
+storage.mode(shared_mat) <- "integer"
+
+# Sanity check: pairwise overlaps cannot exceed each region's own profile count
+diag_counts <- diag(shared_mat)
+bad_idx <- which(shared_mat > matrix(diag_counts, nrow = length(diag_counts), ncol = length(diag_counts), byrow = TRUE), arr.ind = TRUE)
+if (nrow(bad_idx) > 0) {
+  stop("Internal consistency check failed: some pairwise overlaps exceed region self-counts.")
+}
+
+shared_mat_df <- as.data.frame(shared_mat, check.names = FALSE)
+shared_mat_df <- tibble::rownames_to_column(shared_mat_df, var = "region")
+
+print(knitr::kable(shared_mat_df, caption = "Number of shared C15 ITS2 profiles between each region pair"))
+
+readr::write_csv(shared_mat_df, here("figures/shared_c15_profiles_region_matrix.csv"))
+
+# Per-region counts of unique vs shared profiles
+profile_region_counts <- rowSums(inc_mat)
+
+region_unique_counts <- colSums(inc_mat[profile_region_counts == 1, , drop = FALSE])
+region_shared_counts <- colSums(inc_mat[profile_region_counts > 1, , drop = FALSE])
+
+region_profile_uniqueness <- tibble(
+  region = factor(names(region_unique_counts), levels = region_names)
+) %>%
+  mutate(
+    n_unique_profiles = as.integer(region_unique_counts[as.character(region)]),
+    n_shared_profiles = as.integer(region_shared_counts[as.character(region)])
+  ) %>%
+  arrange(region) %>%
+  mutate(region = as.character(region))
+
+region_profile_uniqueness <- dplyr::bind_rows(
+  region_profile_uniqueness,
+  tibble(
+    region = "TOTAL",
+    n_unique_profiles = sum(region_profile_uniqueness$n_unique_profiles, na.rm = TRUE),
+    n_shared_profiles = sum(region_profile_uniqueness$n_shared_profiles, na.rm = TRUE)
+  )
+)
+
+print(knitr::kable(
+  region_profile_uniqueness,
+  caption = "Per-region counts of unique and shared C15 ITS2 profiles (with column totals)"
+))
+
+readr::write_csv(region_profile_uniqueness, here("figures/c15_profile_uniqueness_by_region.csv"))
+
+# Heatmap view of the same overlap matrix for easier visual comparison
+shared_long <- as.data.frame(as.table(shared_mat), stringsAsFactors = FALSE) %>%
+  dplyr::rename(region1 = Var1, region2 = Var2, shared_profiles = Freq) %>%
+  dplyr::mutate(
+    row_idx = match(region1, region_names),
+    col_idx = match(region2, region_names)
+  ) %>%
+  dplyr::filter(row_idx >= col_idx) %>%
+  dplyr::mutate(
+    region1 = factor(region1, levels = rev(region_names)),
+    region2 = factor(region2, levels = region_names)
+  ) %>%
+  dplyr::select(region1, region2, shared_profiles)
+
+p_shared_profile_heatmap <- ggplot(shared_long, aes(x = region2, y = region1, fill = shared_profiles)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  geom_text(aes(label = shared_profiles), size = 3) +
+  scale_fill_gradient(low = "#f7fbff", high = "#1dbc5a", name = "Shared\n C15 profiles") +
+  coord_equal() +
+  labs(
+    x = "Region",
+    y = "Region",
+    title = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+
+print(p_shared_profile_heatmap)
+
+ggsave(here("figures/shared_c15_profiles_region_heatmap.png"), p_shared_profile_heatmap, width = 9, height = 8, dpi = 300)
+ggsave(here("figures/shared_c15_profiles_region_heatmap.svg"), p_shared_profile_heatmap, width = 9, height = 8)
+```
+
+# 7. Data Summary
+```{r regional-data-summary}
+summary_region_order <- c("RS", "WIO", "NIO", "WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP")
+
+# Total sample size by region (from region_centroids)
+sample_size_by_region <- region_centroids %>%
+  transmute(
+    region = as.character(region),
+    total_sample_size = suppressWarnings(as.integer(sample_size))
+  )
+
+# Profile counts by genus from sample_profile_list
+profiles_long <- sample_profile_list %>%
+  transmute(sample_id = as.character(sample_id), across(-sample_id, as.character)) %>%
+  tidyr::pivot_longer(
+    cols = -sample_id,
+    names_to = "profile_slot",
+    values_to = "its2_profile"
+  ) %>%
+  mutate(its2_profile = stringr::str_trim(its2_profile)) %>%
+  filter(!is.na(its2_profile), its2_profile != "")
+
+profiles_with_region <- profiles_long %>%
+  left_join(
+    sample_metadata %>% transmute(sample_id = as.character(sample_id), region = as.character(region)),
+    by = "sample_id"
+  ) %>%
+  filter(!is.na(region), region != "")
+
+genus_counts_by_region <- profiles_with_region %>%
+  mutate(
+    genus = case_when(
+      stringr::str_starts(its2_profile, regex("A", ignore_case = TRUE)) ~ "Symbiodinium",
+      stringr::str_starts(its2_profile, regex("B", ignore_case = TRUE)) ~ "Breviolum",
+      stringr::str_starts(its2_profile, regex("C", ignore_case = TRUE)) ~ "Cladocopium",
+      stringr::str_starts(its2_profile, regex("D", ignore_case = TRUE)) ~ "Durusdinium",
+      stringr::str_starts(its2_profile, regex("G", ignore_case = TRUE)) ~ "Gerakladium",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(genus != "Other") %>%
+  count(region, genus, name = "n_profiles") %>%
+  tidyr::pivot_wider(names_from = genus, values_from = n_profiles, values_fill = 0L) %>%
+  transmute(
+    region,
+    n_symbiodinium_profiles = dplyr::coalesce(Symbiodinium, 0L),
+    n_breviolum_profiles = dplyr::coalesce(Breviolum, 0L),
+    n_cladocopium_profiles_total = dplyr::coalesce(Cladocopium, 0L),
+    n_durusdinium_profiles = dplyr::coalesce(Durusdinium, 0L),
+    n_gerakladium_profiles = dplyr::coalesce(Gerakladium, 0L)
+  )
+
+# Cladocopium/C15 count by region from c15_profile_metadata
+c15_counts_by_region <- c15_profile_metadata %>%
+  transmute(region = as.character(region)) %>%
+  filter(!is.na(region), region != "") %>%
+  count(region, name = "n_c15_profiles")
+
+data_summary_table <- tibble(region = summary_region_order) %>%
+  left_join(sample_size_by_region, by = "region") %>%
+  left_join(genus_counts_by_region, by = "region") %>%
+  left_join(c15_counts_by_region, by = "region") %>%
+  mutate(
+    total_sample_size = dplyr::coalesce(total_sample_size, 0L),
+    n_symbiodinium_profiles = dplyr::coalesce(n_symbiodinium_profiles, 0L),
+    n_breviolum_profiles = dplyr::coalesce(n_breviolum_profiles, 0L),
+    n_cladocopium_profiles_total = dplyr::coalesce(n_cladocopium_profiles_total, 0L),
+    n_c15_profiles = dplyr::coalesce(n_c15_profiles, 0L),
+    n_durusdinium_profiles = dplyr::coalesce(n_durusdinium_profiles, 0L),
+    n_gerakladium_profiles = dplyr::coalesce(n_gerakladium_profiles, 0L),
+    total_profiles = n_symbiodinium_profiles + n_breviolum_profiles + n_cladocopium_profiles_total + n_durusdinium_profiles + n_gerakladium_profiles,
+    `region (total_sample_size)` = paste0(region, " (n=", total_sample_size, ")"),
+    n_cladocopium_profiles = paste0(n_cladocopium_profiles_total, " (", n_c15_profiles, ")")
+  ) %>%
+  select(
+    `region (total_sample_size)`,
+    n_symbiodinium_profiles,
+    n_breviolum_profiles,
+    n_cladocopium_profiles,
+    n_durusdinium_profiles,
+    n_gerakladium_profiles,
+    total_profiles
+  ) %>%
+  mutate(References = "") %>%
+  rename(
+    `Region (n)` = `region (total_sample_size)`,
+    Symbiodinium = n_symbiodinium_profiles,
+    Breviolum = n_breviolum_profiles,
+    `Cladocopium (C15 subset)` = n_cladocopium_profiles,
+    Durusdinium = n_durusdinium_profiles,
+    Gerakladium = n_gerakladium_profiles,
+    `Total Profiles` = total_profiles
+  )
+
+print(knitr::kable(data_summary_table, caption = "Regional Data Summary"))
+
+readr::write_csv(data_summary_table, here("figures/regional_data_summary.csv"))
+```
+
+# 8. Which Regions Share Profiles with Aldabra?
+```{r aldabra-shared-profiles-by-sample}
+# Validate required columns
+required_meta_cols_aldabra <- c("sample_id", "study_id", "region", "sea", "location")
+missing_meta_cols_aldabra <- setdiff(required_meta_cols_aldabra, names(sample_metadata))
+if (length(missing_meta_cols_aldabra) > 0) {
+  stop(paste("Missing required columns in sample_metadata:", paste(missing_meta_cols_aldabra, collapse = ", ")))
+}
+
+if (!"sample_id" %in% names(profile_matrix)) {
+  stop("Missing required column 'sample_id' in profile_matrix.")
+}
+
+# Convert profile matrix to sample-profile long format
+sample_profile_abundance <- profile_matrix %>%
+  transmute(sample_id = as.character(sample_id), across(-sample_id, as.numeric)) %>%
+  pivot_longer(
+    cols = -sample_id,
+    names_to = "its2_profile",
+    values_to = "relative_abundance"
+  ) %>%
+  filter(!is.na(relative_abundance), relative_abundance > 0) %>%
+  mutate(its2_profile = stringr::str_trim(as.character(its2_profile))) %>%
+  filter(!is.na(its2_profile), its2_profile != "")
+
+# Keep one row per sample/profile and attach metadata
+sample_profile_presence <- sample_profile_abundance %>%
+  distinct(sample_id, its2_profile)
+
+sample_meta_clean <- sample_metadata %>%
+  transmute(
+    sample_id = as.character(sample_id),
+    study_id = as.character(study_id),
+    region = as.character(region),
+    sea = as.character(sea),
+    location = as.character(location)
+  )
+
+sample_profile_with_meta <- sample_profile_presence %>%
+  inner_join(sample_meta_clean, by = "sample_id")
+
+# Identify Aldabra samples (case-insensitive study_id match)
+aldabra_sample_profiles <- sample_profile_with_meta %>%
+  filter(stringr::str_to_lower(stringr::str_trim(study_id)) == "aldabra")
+
+if (nrow(aldabra_sample_profiles) == 0) {
+  stop("No samples found with study_id equal to 'aldabra'.")
+}
+
+aldabra_profiles <- aldabra_sample_profiles %>%
+  distinct(its2_profile)
+
+# Samples from other studies that share >=1 profile with Aldabra samples
+shared_with_aldabra <- sample_profile_with_meta %>%
+  inner_join(aldabra_profiles, by = "its2_profile") %>%
+  filter(stringr::str_to_lower(stringr::str_trim(study_id)) != "aldabra") %>%
+  select(sample_id, region, sea, location, its2_profile, study_id) %>%
+  arrange(region, sea, location, study_id, sample_id, its2_profile)
+
+if (nrow(shared_with_aldabra) == 0) {
+  message("No non-Aldabra samples share profiles with Aldabra samples.")
+} else {
+  print(
+    knitr::kable(
+      shared_with_aldabra,
+      caption = "Samples sharing at least one ITS2 profile with Aldabra samples"
+    )
+  )
+}
+
+readr::write_csv(shared_with_aldabra, here("figures/aldabra_shared_profiles_by_sample.csv"))
+```
+
+# 9. Profile summary
+
+## Total Unique Profiles and C15 Counts
+
+```{r total-profile-summary}
+# Extract all unique profiles from the profile matrix
+all_unique_profiles <- profile_matrix %>%
+  select(-sample_id) %>%
+  names() %>%
+  stringr::str_trim() %>%
+  unique() %>%
+  discard(~. == "")
+
+total_unique_profiles <- length(all_unique_profiles)
+
+# Get all C15 profiles from the metadata
+c15_profiles <- c15_profile_metadata %>%
+  transmute(ITS2_profile = stringr::str_trim(as.character(ITS2_profile))) %>%
+  filter(!is.na(ITS2_profile), ITS2_profile != "") %>%
+  distinct(ITS2_profile) %>%
+  pull(ITS2_profile)
+
+n_c15_profiles <- length(intersect(all_unique_profiles, c15_profiles))
+
+# Non-C15 profiles
+n_non_c15_profiles <- total_unique_profiles - n_c15_profiles
+
+# Genus classifier used for both total unique and C15 subsets
+classify_profile_genus <- function(profile_id) {
+  profile_id <- stringr::str_trim(as.character(profile_id))
+  first_char <- stringr::str_to_upper(stringr::str_sub(profile_id, 1, 1))
+
+  dplyr::case_when(
+    first_char == "A" ~ "Symbiodinium",
+    first_char == "B" ~ "Breviolum",
+    first_char == "C" ~ "Cladocopium",
+    first_char == "D" ~ "Durusdinium",
+    first_char == "G" ~ "Gerakladium",
+    TRUE ~ "Other"
+  )
+}
+
+all_unique_df <- tibble(its2_profile = all_unique_profiles) %>%
+  mutate(genus = classify_profile_genus(its2_profile))
+
+c15_in_dataset_df <- tibble(its2_profile = intersect(all_unique_profiles, c15_profiles)) %>%
+  mutate(genus = classify_profile_genus(its2_profile))
+
+genus_order <- c("Symbiodinium", "Breviolum", "Cladocopium", "Durusdinium", "Gerakladium", "Other")
+
+genus_total_counts <- all_unique_df %>%
+  count(genus, name = "n_unique_profiles_total")
+
+genus_c15_counts <- c15_in_dataset_df %>%
+  count(genus, name = "n_c15_profiles")
+
+genus_profile_summary_all <- tibble(genus = genus_order) %>%
+  left_join(genus_total_counts, by = "genus") %>%
+  mutate(
+    n_unique_profiles_total = dplyr::coalesce(n_unique_profiles_total, 0L),
+    pct_of_total = if (total_unique_profiles > 0) {
+      round(100 * n_unique_profiles_total / total_unique_profiles, 1)
+    } else {
+      rep(0, dplyr::n())
+    }
+  ) %>%
+  transmute(
+    Genus = genus,
+    `Number of Profiles` = n_unique_profiles_total,
+    `Percentage of Total` = pct_of_total
+  )
+
+genus_profile_summary_c15 <- tibble(genus = genus_order) %>%
+  left_join(genus_c15_counts, by = "genus") %>%
+  mutate(n_c15_profiles = dplyr::coalesce(n_c15_profiles, 0L))
+
+# Use a scalar total to avoid name masking with the n_c15_profiles column above
+n_c15_profiles_total <- n_c15_profiles
+
+genus_profile_summary_c15 <- genus_profile_summary_c15 %>%
+  mutate(
+    pct_of_total = if (n_c15_profiles_total > 0) {
+      round(100 * n_c15_profiles / n_c15_profiles_total, 1)
+    } else {
+      rep(0, dplyr::n())
+    }
+  ) %>%
+  transmute(
+    Genus = genus,
+    `Number of Profiles` = n_c15_profiles,
+    `Percentage of Total` = pct_of_total
+  )
+
+# Summary table
+profile_summary <- tibble(
+  `Profile Category` = c("C15 Profiles", "Non-C15 Profiles", "Total Unique Profiles"),
+  `Count` = c(n_c15_profiles, n_non_c15_profiles, total_unique_profiles),
+  `Percentage` = c(
+    round(100 * n_c15_profiles / total_unique_profiles, 1),
+    round(100 * n_non_c15_profiles / total_unique_profiles, 1),
+    100.0
+  )
+)
+
+print(knitr::kable(profile_summary, caption = "Overall Profile Summary"))
+
+print(knitr::kable(
+  genus_profile_summary_all,
+  caption = "All Unique Profiles by Genus"
+))
+
+print(knitr::kable(
+  genus_profile_summary_c15,
+  caption = "C15 Subset Profiles by Genus"
+))
+
+readr::write_csv(profile_summary, here("figures/overall_profile_summary.csv"))
+readr::write_csv(genus_profile_summary_all, here("figures/overall_profile_genus_summary_all.csv"))
+readr::write_csv(genus_profile_summary_c15, here("figures/overall_profile_genus_summary_c15.csv"))
+
+cat("\n**Summary:**\n")
+cat("Total unique profiles:", total_unique_profiles, "\n")
+cat("C15 profiles:", n_c15_profiles, "(", round(100*n_c15_profiles/total_unique_profiles, 1), "%)\n")
+cat("Non-C15 profiles:", n_non_c15_profiles, "(", round(100*n_non_c15_profiles/total_unique_profiles, 1), "%)\n")
+```
+
+## C15 Profile Uniqueness by Region
+
+```{r c15-profile-uniqueness-by-region}
+# Create binary incidence matrix for C15 profiles by region
+c15_incidence <- c15_profile_metadata %>%
+  transmute(
+    region = stringr::str_trim(as.character(region)),
+    ITS2_profile = stringr::str_trim(as.character(ITS2_profile))
+  ) %>%
+  filter(!is.na(region), region != "", !is.na(ITS2_profile), ITS2_profile != "") %>%
+  distinct(region, ITS2_profile) %>%
+  mutate(present = 1L) %>%
+  tidyr::pivot_wider(
+    names_from = region,
+    values_from = present,
+    values_fill = 0L
+  )
+
+c15_inc_mat <- as.matrix(c15_incidence[, setdiff(names(c15_incidence), "ITS2_profile"), drop = FALSE])
+storage.mode(c15_inc_mat) <- "integer"
+
+# Count how many regions each profile is found in
+profile_region_count <- rowSums(c15_inc_mat)
+
+# Per-region breakdown of C15 profiles
+c15_unique_counts <- colSums(c15_inc_mat[profile_region_count == 1, , drop = FALSE])
+c15_shared_counts <- colSums(c15_inc_mat[profile_region_count > 1, , drop = FALSE])
+
+# Create summary table for each region
+region_c15_uniqueness <- tibble(
+  region = colnames(c15_inc_mat)
+) %>%
+  mutate(
+    n_unique_c15 = as.integer(c15_unique_counts[region]),
+    n_shared_c15 = as.integer(c15_shared_counts[region]),
+    total_c15 = as.integer(colSums(c15_inc_mat)[region])
+  ) %>%
+  arrange(factor(region, levels = c("RS", "WIO", "NIO", "WPM", "WCP", "SWP", "NCP", "CP", "CSP", "SEP", "ETP"))) %>%
+  mutate(
+    pct_unique = round(100 * n_unique_c15 / total_c15, 1),
+    pct_shared = round(100 * n_shared_c15 / total_c15, 1)
+  )
+
+print(knitr::kable(
+  region_c15_uniqueness %>% select(region, n_unique_c15, n_shared_c15, total_c15, pct_unique, pct_shared),
+  col.names = c("Region", "Unique C15", "Shared C15", "Total C15", "% Unique", "% Shared"),
+  caption = "C15 Profile Uniqueness by Region"
+))
+
+readr::write_csv(region_c15_uniqueness, here("figures/c15_profile_uniqueness_by_region.csv"))
+
+# Overall summary
+total_unique_c15 <- sum(profile_region_count == 1)
+total_shared_c15 <- sum(profile_region_count > 1)
+
+cat("\n**C15 Profile Summary:**\n")
+cat("Total C15 profiles:", n_c15_profiles, "\n")
+cat("Unique to single region:", total_unique_c15, "(", round(100*total_unique_c15/n_c15_profiles, 1), "%)\n")
+cat("Shared across multiple regions:", total_shared_c15, "(", round(100*total_shared_c15/n_c15_profiles, 1), "%)\n")
+```
+
+## Shared C15 Profiles Distribution
+
+```{r c15-sharing-distribution}
+# Breakdown of how profiles are shared
+sharing_dist <- tibble(
+  n_regions = 1:max(profile_region_count),
+  n_profiles = as.integer(sapply(1:max(profile_region_count), function(k) sum(profile_region_count == k)))
+) %>%
+  mutate(
+    pct_of_total = round(100 * n_profiles / n_c15_profiles, 1),
+    category = case_when(
+      n_regions == 1 ~ "Unique to single region",
+      n_regions == 2 ~ "Shared between 2 regions",
+      TRUE ~ paste0("Shared between ", n_regions, " regions")
+    )
+  ) %>%
+  filter(n_profiles > 0)
+
+print(knitr::kable(
+  sharing_dist %>% select(category, n_profiles, pct_of_total),
+  col.names = c("Sharing Category", "Number of C15 Profiles", "Percentage"),
+  caption = "Distribution of C15 Profile Sharing Across Regions"
+))
+
+readr::write_csv(sharing_dist, here("figures/c15_sharing_distribution.csv"))
+```
