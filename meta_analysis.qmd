@@ -844,6 +844,8 @@ genus_counts_by_region <- profiles_with_region %>%
     )
   ) %>%
   filter(genus != "Other") %>%
+  # Count unique ITS2 profiles per region/genus (one profile counted once per region)
+  distinct(region, its2_profile, genus) %>%
   count(region, genus, name = "n_profiles") %>%
   tidyr::pivot_wider(names_from = genus, values_from = n_profiles, values_fill = 0L) %>%
   transmute(
