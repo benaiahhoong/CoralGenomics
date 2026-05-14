@@ -1,6 +1,6 @@
 File guide
 
-Aldabra data:
+1. Aldabra data:
 
 Raw ITS2 sequencing data is accessible under NCBI's BioProject ID PRJNA1465797
 
@@ -17,7 +17,9 @@ its2_type_profiles_absolute.csv: absolute abundance of ITS2 type profiles
 its2_type_profiles_relative.csv: relative abundance of ITS2 type profiles
 
 
-Indo-Pacific data:
+
+
+2. Indo-Pacific data:
 
 r_processed_profile_matrix.xlsx: matrix of individual samples and their ITS2 type profiles
 
@@ -36,7 +38,9 @@ manual_unifrac_profiles_PCoA_coords_C15_no_sqrt.csv: PCoA coordinates among C15 
 manual_unifrac_profiles_PCoA_coords_C15_sqrt.csv: PCoA coordinates among C15 profiles (square-root transformed)
 
 
-Analyses files:
+
+
+3. Analyses files:
 
 map.qmd: map of sampling locations at Aldabra
 
